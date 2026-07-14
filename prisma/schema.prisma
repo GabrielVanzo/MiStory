@@ -1,0 +1,221 @@
+// Black Stories — Prisma schema
+// Learn more: https://pris.ly/d/prisma-schema
+//
+// PORTABILITY (SQLite now → PostgreSQL later)
+// -------------------------------------------------------------------------
+// This schema is written to run on SQLite today and move to PostgreSQL with
+// minimal changes. Guidelines applied:
+//   * No native `enum` blocks — SQLite has none. Enum-like columns are `String`
+//     with their allowed values documented here and mirrored as TypeScript
+//     unions/constants in `types/game.ts`. On Postgres these can become native
+//     `enum`s if desired.
+//   * No provider-specific native types (`@db.*`), so the same schema validates
+//     on both connectors.
+//   * IDs use `cuid()`; timestamps use `@default(now())` / `@updatedAt`.
+//
+// To switch to PostgreSQL:
+//   1. Set `provider = "postgresql"` below and point DATABASE_URL at Postgres.
+//   2. (optional) Convert the documented String status fields into `enum`s.
+//   3. (optional) Add native types where useful (e.g. `@db.Text`, `@db.Uuid`).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------------------
+// Enigma — reusable catalog of mysteries ("histórias"). Independent of any
+// match so the same puzzle can be replayed across many rooms/rounds.
+// ---------------------------------------------------------------------------
+model Enigma {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  title       String
+  /// Public scene shown to every player.
+  teaser      String
+  /// Hidden full explanation, revealed only when solved.
+  solution    String
+  /// Difficulty — one of: EASY | MEDIUM | HARD (see types/game.ts).
+  difficulty  String  @default("MEDIUM")
+  language    String  @default("pt-BR")
+  isPublished Boolean @default(true)
+
+  rounds Round[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isPublished, difficulty])
+}
+
+// ---------------------------------------------------------------------------
+// Room ("Sala") — a lobby/session that gathers players and hosts one or more
+// rounds. Also carries the overall match state ("Estado da Partida").
+// ---------------------------------------------------------------------------
+model Room {
+  id   String @id @default(cuid())
+  /// Human-friendly join code, e.g. "LAGO-7X2K".
+  code String @unique
+  name String
+
+  /// Match state — one of: LOBBY | PLAYING | FINISHED (see types/game.ts).
+  status       String  @default("LOBBY")
+  isPrivate    Boolean @default(true)
+  /// Hashed password for private rooms (never stored in plaintext). Null = open.
+  passwordHash String?
+  maxPlayers   Int     @default(8)
+
+  /// Lightweight pointer to the active round's number (no FK, avoids cycles).
+  currentRoundNumber Int?
+  /// Flexible per-room configuration for future growth.
+  settings           Json?
+
+  players Player[]
+  rounds  Round[]
+  scores  Score[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  endedAt   DateTime?
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Player ("Jogador") — a participant inside a room. Guests today; `userId`
+// reserves the link to a future account system.
+// ---------------------------------------------------------------------------
+model Player {
+  id       String  @id @default(cuid())
+  roomId   String
+  nickname String
+  /// UI accent color (hex/token), assigned on join.
+  color    String?
+
+  /// Room owner/admin. The per-round narrator is tracked on Round.masterId.
+  isHost       Boolean @default(false)
+  /// Presence flag for realtime connection state.
+  isConnected  Boolean @default(true)
+  /// Secret used to reclaim this player's identity on reconnect.
+  sessionToken String? @unique
+  /// Reserved for future authenticated accounts (null = guest).
+  userId       String?
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  questions      Question[]
+  answers        Answer[]   @relation("AnswerAuthor")
+  masteredRounds Round[]    @relation("RoundMaster")
+  solvedRounds   Round[]    @relation("RoundSolver")
+  scores         Score[]
+
+  joinedAt   DateTime  @default(now())
+  lastSeenAt DateTime?
+
+  @@unique([roomId, nickname])
+  @@index([roomId])
+}
+
+// ---------------------------------------------------------------------------
+// Round ("Rodada") — a single play of one enigma within a room, narrated by a
+// master player and investigated through questions.
+// ---------------------------------------------------------------------------
+model Round {
+  id         String  @id @default(cuid())
+  roomId     String
+  enigmaId   String
+  /// Narrator for this round (nullable so history survives if they leave).
+  masterId   String?
+  /// Player who cracked it, if any.
+  solvedById String?
+
+  /// 1-based position within the room.
+  number Int
+  /// Round state — one of: WAITING | ACTIVE | SOLVED | ABANDONED (types/game.ts).
+  status String @default("WAITING")
+
+  room     Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  enigma   Enigma  @relation(fields: [enigmaId], references: [id])
+  master   Player? @relation("RoundMaster", fields: [masterId], references: [id], onDelete: SetNull)
+  solvedBy Player? @relation("RoundSolver", fields: [solvedById], references: [id], onDelete: SetNull)
+
+  questions Question[]
+  scores    Score[]
+
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([roomId, number])
+  @@index([roomId, status])
+  @@index([enigmaId])
+}
+
+// ---------------------------------------------------------------------------
+// Question ("Pergunta") — a yes/no question asked by a player during a round.
+// ---------------------------------------------------------------------------
+model Question {
+  id       String @id @default(cuid())
+  roundId  String
+  playerId String
+  content  String
+
+  round  Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  answer Answer?
+
+  createdAt DateTime @default(now())
+
+  @@index([roundId, createdAt])
+  @@index([playerId])
+}
+
+// ---------------------------------------------------------------------------
+// Answer ("Resposta") — the master's reply to a question (1:1 with Question).
+// ---------------------------------------------------------------------------
+model Answer {
+  id         String  @id @default(cuid())
+  questionId String  @unique
+  /// The master who answered (nullable to preserve history).
+  authorId   String?
+  /// Answer value — one of: YES | NO | IRRELEVANT | UNKNOWN (see types/game.ts).
+  value      String
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  author   Player?  @relation("AnswerAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Score ("Pontuação") — an append-only ledger of point events. Totals are
+// aggregated at query time, which keeps an auditable history and scales well.
+// ---------------------------------------------------------------------------
+model Score {
+  id       String  @id @default(cuid())
+  roomId   String
+  playerId String
+  /// Optional link to the round that awarded the points (null = room-level).
+  roundId  String?
+
+  points Int
+  /// Why points were awarded — e.g. SOLVED_ENIGMA | GOOD_QUESTION | HOST_BONUS.
+  reason String?
+
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  round  Round? @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([roomId, playerId])
+  @@index([roundId])
+}
