@@ -6,12 +6,15 @@
     "node": "24.x"
   },
   "scripts": {
+    "predev": "node scripts/check-node.mjs",
     "dev": "concurrently -n web,socket -c blue,magenta \"npm:dev:web\" \"npm:dev:socket\"",
     "dev:web": "next dev",
+    "predev:socket": "node scripts/check-node.mjs",
     "dev:socket": "tsx watch server.ts",
     "build": "next build",
     "start": "concurrently -n web,socket -c blue,magenta \"npm:start:web\" \"npm:start:socket\"",
     "start:web": "next start",
+    "prestart:socket": "node scripts/check-node.mjs",
     "start:socket": "tsx server.ts",
     "lint": "eslint",
     "lint:fix": "eslint --fix",

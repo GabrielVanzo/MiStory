@@ -21,11 +21,13 @@ os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
   é a maior que a Vercel suporta, é LTS, e manter tudo alinhado evita o erro de ABI abaixo.
 - npm
 
-> ⚠️ **Trocou de versão do Node? Rode `npm rebuild better-sqlite3`.**
+> ⚠️ **Sempre `nvm use` antes de `npm run dev`.**
 > O `better-sqlite3` é um módulo **nativo**: o binário é compilado contra o ABI de uma
-> versão específica do Node. Rodar com outra versão gera um erro de runtime confuso
-> (`NODE_MODULE_VERSION 137 ... requires 147`) — não é bug do código, é só recompilar.
-> Rodar `nvm use` na raiz evita isso: você sempre pega a versão certa.
+> versão específica do Node. Na versão errada, o servidor de tempo real *sobe* mas toda
+> operação de banco falha — o jogo parece no ar e está quebrado.
+> Um guard (`scripts/check-node.mjs`, rodado no `predev`) barra isso com uma mensagem
+> clara antes de qualquer coisa iniciar. Se quiser ficar numa versão diferente do
+> `.nvmrc`, é só `npm rebuild better-sqlite3`.
 
 ## Setup
 
