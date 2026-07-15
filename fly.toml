@@ -1,45 +1,37 @@
-# Fly.io — hosts ONLY the realtime server (server.ts).
-# The Next app stays on Vercel; this is the "always-on" half it cannot run.
+# fly.toml app configuration file generated for black-stories-realtime on 2026-07-15T17:49:13-03:00
 #
-# Deploy:
-#   fly launch --no-deploy --copy-config   (creates the app)
-#   fly volumes create black_stories_data --size 1 --region gru
-#   fly secrets set CLIENT_ORIGIN="https://black-stories-teal.vercel.app"
-#   fly deploy
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "black-stories-realtime"
-primary_region = "gru" # São Paulo — closest to the players
+app = 'black-stories-realtime'
+primary_region = 'gru'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  # Must match http_service.internal_port below. Fly does not inject PORT.
-  PORT = "3001"
-  # The database lives on the mounted volume, not in the image.
-  DATABASE_URL = "file:/data/prod.db"
+  DATABASE_URL = 'file:/data/prod.db'
+  PORT = '3001'
 
-# The volume IS the database. Without it every deploy wipes rooms and scores.
 [[mounts]]
-  source = "black_stories_data"
-  destination = "/data"
+  source = 'black_stories_data'
+  destination = '/data'
 
 [http_service]
   internal_port = 3001
-  force_https = true # the Vercel site is https; a http socket would be blocked
-
-  # CRITICAL: a realtime server must never sleep or scale out.
-  #  - it holds live sockets, the round timers and the presence map in memory
-  #  - the SQLite volume attaches to ONE machine
-  # Scaling to zero would drop every player mid-round; a second machine would
-  # have its own memory and no access to this volume.
-  auto_stop_machines = false
+  force_https = true
+  auto_stop_machines = 'off'
   auto_start_machines = false
   min_machines_running = 1
 
-[[http_service.checks]]
-  method = "GET"
-  path = "/health"
-  interval = "30s"
-  timeout = "5s"
-  grace_period = "20s" # first boot runs migrate + seed
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '20s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024
