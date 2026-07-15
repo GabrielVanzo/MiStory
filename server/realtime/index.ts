@@ -11,9 +11,11 @@ import type {
 import { RealtimeError } from "../../lib/realtime/events";
 import { REALTIME_CONFIG } from "./config";
 import { RoomError } from "./errors";
+import { allow, forgetSocket } from "./rate-limit";
 import {
   buildRoomState,
   createRoom,
+  findHostId,
   joinOrResume,
   leaveRoom,
   setConnected,
@@ -68,13 +70,17 @@ async function broadcastState(io: RealtimeServer, roomId: string): Promise<void>
  * the host (re)joins, and after a host transfer so the new host can narrate.
  */
 async function sendSecretToHost(io: RealtimeServer, roomId: string): Promise<void> {
-  const state = await buildRoomState(roomId);
-  // Only while the round runs: once it ends the solution is public via `reveal`.
-  if (!state?.hostId || state.round?.status !== "ACTIVE") return;
+  // PERF: this used to call buildRoomState — the full snapshot (players, round,
+  // questions, guesses, leaderboard, history) just to read two fields. Now it
+  // asks only for the host id, which is all the decision needs.
+  const hostId = await findHostId(roomId);
+  if (!hostId) return;
 
-  const socketId = playerSocket.get(state.hostId);
+  const socketId = playerSocket.get(hostId);
   if (!socketId) return; // host is offline — nothing to deliver
 
+  // Returns null unless a round is ACTIVE: once it ends the solution becomes
+  // public through `reveal`, so there is nothing private left to deliver.
   const secret = await getActiveRoundSecret(roomId);
   if (secret) io.to(socketId).emit("round:secret", secret);
 }
@@ -147,6 +153,20 @@ async function attach(socket: RealtimeSocket, payload: RoomJoinedPayload): Promi
 
 export function registerRealtimeHandlers(io: RealtimeServer): void {
   io.on("connection", (socket: RealtimeSocket) => {
+    // Budget every inbound event in one place, before any handler runs. The UI
+    // disabling a button is cosmetic; this is the actual limit.
+    socket.use(([event, ...args], next) => {
+      if (allow(socket.id, String(event))) return next();
+
+      // Reply through the ack (last arg) when there is one, so the client shows
+      // a proper message instead of hanging.
+      const ack = args[args.length - 1];
+      if (typeof ack === "function") {
+        (ack as (res: Ack<never>) => void)({ ok: false, error: RealtimeError.RATE_LIMITED });
+      }
+      // Swallow the event: do not pass it to the handler.
+    });
+
     socket.on("room:create", async (input, ack) => {
       try {
         const payload = await createRoom(input);
@@ -162,8 +182,9 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         const payload = await joinOrResume(input);
         await attach(socket, payload);
         ack({ ok: true, data: payload });
-        // Let everyone (incl. the joiner) converge on the authoritative state.
-        await broadcastState(io, payload.room.id);
+        // PERF: joinOrResume already built this exact snapshot and nothing has
+        // changed since, so broadcast it instead of rebuilding it.
+        io.to(payload.room.id).emit("room:state", payload.room);
         // A host rejoining (reload/reconnect) must get the answer back.
         // Non-hosts never reach this branch.
         const isHost = payload.room.players.some((p) => p.id === payload.playerId && p.isHost);
@@ -322,6 +343,7 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
     });
 
     socket.on("disconnect", async () => {
+      forgetSocket(socket.id);
       const { playerId } = socket.data;
       if (!playerId) return;
       // Ignore if a newer socket already took over this player (reconnect).

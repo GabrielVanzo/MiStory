@@ -3,7 +3,7 @@
 Jogo de enigmas multiplayer em tempo real. Um mestre conhece a história completa;
 os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
 
-> **Status:** MVP em construção — Etapas 1–11 concluídas — jogo jogável de ponta a ponta (setup, design system, layout, banco, tempo real, salas, enigmas, fluxo da partida, perguntas, chutes, pontuação).
+> **Status:** ✅ MVP concluído — Etapas 1–15 — jogo jogável de ponta a ponta (setup, design system, layout, banco, tempo real, salas, enigmas, fluxo da partida, perguntas, chutes, pontuação, UX, segurança, refatoração, polimento).
 
 ## Stack
 
@@ -50,20 +50,36 @@ npm run dev          # sobe Next (:3000) + servidor Socket.IO (:3001) juntos
 | `npm run db:migrate`   | Cria/aplica migrations em desenvolvimento |
 | `npm run db:studio`    | Abre o Prisma Studio                      |
 
+## Produção — o que saber antes de subir
+
+- **Dois processos**: o app Next e o servidor Socket.IO (`server.ts`) são independentes.
+  `npm start` sobe os dois; num deploy real cada um é um serviço (o realtime precisa de
+  conexão persistente, então não vai em serverless).
+- **Variáveis obrigatórias**: `DATABASE_URL`, `CLIENT_ORIGIN` (origem permitida no CORS),
+  `NEXT_PUBLIC_SOCKET_URL`, `NEXT_PUBLIC_SITE_URL`.
+- **Banco**: SQLite serve bem um nó. O schema é portável — trocar para PostgreSQL é mudar
+  o `provider` (veja o cabeçalho de `prisma/schema.prisma`). Rode `db:migrate` + `db:seed`.
+- **Limitações conhecidas**:
+  - O rate limit vive em memória, por nó → um deploy multi-nó precisa de um store
+    compartilhado (Redis), e o Socket.IO precisaria de um adapter.
+  - `start:socket` roda TypeScript via `tsx`. Funciona; compilar para JS é o passo natural
+    se o boot precisar ser mais enxuto.
+  - `/design` é o showcase interno do design system — continua acessível pela URL, mas
+    deixou de ser anunciado na navegação do jogador.
+
 ## Arquitetura de pastas
 
 ```
 app/         Rotas e layouts (App Router)
-components/  Componentes de UI reutilizáveis (ui/ = shadcn)
+components/  UI reutilizável (ui/ = shadcn, layout/ = shell)
 data/        Conteúdo estático (catálogo de enigmas)
-features/    Módulos por domínio/funcionalidade
+features/    Módulos por domínio (room/ = toda a sala)
 hooks/       React hooks compartilhados
-lib/         Integrações e utilitários de baixo nível (prisma, cn)
-server/      Código exclusivo do servidor (actions, orquestração)
-services/    Regras de negócio / casos de uso
-types/       Tipos TypeScript compartilhados
-utils/       Funções utilitárias puras
-prisma/      Schema e banco SQLite
+lib/         Integrações de baixo nível (prisma, realtime client, cn)
+server/      Código exclusivo do servidor — realtime/ concentra as regras de negócio
+types/       Tipos e uniões compartilhados
+utils/       Funções puras (formatação)
+prisma/      Schema, migrations, seed e banco SQLite
 ```
 
 O alias `@/*` aponta para a raiz do projeto (ex.: `@/lib/prisma`, `@/components/ui/button`).

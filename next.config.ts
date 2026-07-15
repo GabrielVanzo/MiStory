@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Keep native / Prisma packages out of the server bundle so the
-  // better-sqlite3 native binding is loaded at runtime instead of bundled.
-  serverExternalPackages: ["better-sqlite3", "@prisma/adapter-better-sqlite3"],
+  // The realtime server (server.ts, run by tsx) is the only process that talks
+  // to the database, so Next never bundles Prisma or the better-sqlite3 native
+  // binding — no serverExternalPackages needed here.
 };
 
 export default nextConfig;

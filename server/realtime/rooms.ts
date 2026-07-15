@@ -10,7 +10,9 @@ import type {
 } from "../../lib/realtime/events";
 import { RealtimeError } from "../../lib/realtime/events";
 import { REALTIME_CONFIG } from "./config";
-import { RoomError } from "./errors";
+import { asRoomStatus } from "./db-enums";
+import { isUniqueViolation, RoomError } from "./errors";
+import { asBoolean, asInt, asText } from "./input";
 import { getPublicRound } from "./rounds";
 import { getHistory, getLeaderboard } from "./scores";
 
@@ -56,26 +58,12 @@ async function generateUniqueCode(): Promise<string> {
  * Accepts what users actually type — "lago7x2k", "LAGO 7X2K", "lago-7x2k" —
  * and returns the canonical "LAGO-7X2K". Returns null when it cannot be a code.
  */
-export function normalizeCode(raw: string): string | null {
+function normalizeCode(raw: string): string | null {
   const cleaned = String(raw ?? "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
   if (cleaned.length !== CODE_SEGMENT * 2) return null;
   return `${cleaned.slice(0, CODE_SEGMENT)}-${cleaned.slice(CODE_SEGMENT)}`;
-}
-
-/** Prisma unique-constraint violation, detected without importing error classes. */
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  );
-}
-
-function cleanText(value: unknown, max: number): string {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 type PlayerRow = {
@@ -105,9 +93,30 @@ function toPlayerDTO(player: PlayerRow): PlayerDTO {
  * `getPublicRound`, which never loads the enigma's answer/explanation.
  */
 export async function buildRoomState(roomId: string): Promise<RoomState | null> {
+  // SECURITY: explicit select — `include` would load sessionToken into the very
+  // object we broadcast. It is filtered out by toPlayerDTO, but not loading a
+  // secret at all is a stronger guarantee than remembering to strip it.
   const room = await prisma.room.findUnique({
     where: { id: roomId },
-    include: { players: { orderBy: { joinedAt: "asc" } } },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      status: true,
+      isPrivate: true,
+      maxPlayers: true,
+      players: {
+        orderBy: { joinedAt: "asc" },
+        select: {
+          id: true,
+          nickname: true,
+          color: true,
+          isHost: true,
+          isConnected: true,
+          joinedAt: true,
+        },
+      },
+    },
   });
   if (!room) return null;
 
@@ -122,7 +131,7 @@ export async function buildRoomState(roomId: string): Promise<RoomState | null> 
     id: room.id,
     code: room.code,
     name: room.name,
-    status: room.status,
+    status: asRoomStatus(room.status),
     isPrivate: room.isPrivate,
     maxPlayers: room.maxPlayers,
     hostId: host?.id ?? null,
@@ -134,15 +143,23 @@ export async function buildRoomState(roomId: string): Promise<RoomState | null> 
   };
 }
 
+/** The room's host id, in one query. Cheaper than building the whole state. */
+export async function findHostId(roomId: string): Promise<string | null> {
+  const host = await prisma.player.findFirst({
+    where: { roomId, isHost: true },
+    select: { id: true },
+  });
+  return host?.id ?? null;
+}
+
 export async function createRoom(input: CreateRoomInput): Promise<RoomJoinedPayload> {
-  const name = cleanText(input.name, NAME_MAX);
-  const nickname = cleanText(input.nickname, NICKNAME_MAX);
+  const name = asText(input.name, NAME_MAX);
+  const nickname = asText(input.nickname, NICKNAME_MAX);
   if (!name || !nickname) throw new RoomError(RealtimeError.INVALID_INPUT);
 
-  const maxPlayers = Math.min(
-    MAX_PLAYERS,
-    Math.max(MIN_PLAYERS, Math.trunc(input.maxPlayers ?? MAX_PLAYERS)),
-  );
+  // Coerced, not trusted: "abc" used to become NaN and blow up in Prisma.
+  const maxPlayers = asInt(input.maxPlayers, MIN_PLAYERS, MAX_PLAYERS, MAX_PLAYERS);
+  const isPrivate = asBoolean(input.isPrivate, true);
 
   const code = await generateUniqueCode();
   const sessionToken = randomUUID();
@@ -152,7 +169,7 @@ export async function createRoom(input: CreateRoomInput): Promise<RoomJoinedPayl
       code,
       name,
       status: "LOBBY",
-      isPrivate: input.isPrivate ?? true,
+      isPrivate,
       maxPlayers,
       players: {
         create: {
@@ -173,14 +190,20 @@ export async function createRoom(input: CreateRoomInput): Promise<RoomJoinedPayl
 }
 
 export async function joinOrResume(input: JoinRoomInput): Promise<RoomJoinedPayload> {
-  if (!cleanText(input.code, 32)) throw new RoomError(RealtimeError.INVALID_INPUT);
+  if (!asText(input.code, 32)) throw new RoomError(RealtimeError.INVALID_INPUT);
   const code = normalizeCode(input.code);
   if (!code) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
 
   // Reconnection / revisit: reclaim an existing seat by its secret token.
-  if (input.sessionToken) {
+  //
+  // SECURITY: the token MUST be coerced to a string. Passing the raw value
+  // through let a client send `{ not: null }`, which Prisma reads as an
+  // operator — matching the first player in the room and handing the attacker
+  // that identity (host included, and with it the answer).
+  const providedToken = asText(input.sessionToken, 100);
+  if (providedToken) {
     const existing = await prisma.player.findFirst({
-      where: { sessionToken: input.sessionToken, room: { code } },
+      where: { sessionToken: providedToken, room: { code } },
       select: { id: true, roomId: true },
     });
     if (existing) {
@@ -190,11 +213,11 @@ export async function joinOrResume(input: JoinRoomInput): Promise<RoomJoinedPayl
       });
       const state = await buildRoomState(existing.roomId);
       if (!state) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
-      return { room: state, playerId: existing.id, sessionToken: input.sessionToken };
+      return { room: state, playerId: existing.id, sessionToken: providedToken };
     }
   }
 
-  const nickname = cleanText(input.nickname, NICKNAME_MAX);
+  const nickname = asText(input.nickname, NICKNAME_MAX);
   if (!nickname) throw new RoomError(RealtimeError.INVALID_INPUT);
   const sessionToken = randomUUID();
 

@@ -11,24 +11,13 @@ import {
   EmptyStateMedia,
   EmptyStateTitle,
 } from "@/components/ui/empty-state";
+import { ROUND_STATUS_LABEL, ROUND_STATUS_TONE } from "@/features/room/labels";
 import { useRoom } from "@/features/room/room-provider";
 
 const RANK_STYLE: Record<number, string> = {
   1: "bg-warning/15 text-warning ring-warning/30",
   2: "bg-muted text-foreground ring-border",
   3: "bg-primary/10 text-primary ring-primary/25",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  SOLVED: "Resolvido",
-  REVEALED: "Revelado",
-  EXPIRED: "Tempo esgotado",
-};
-
-const STATUS_VARIANT: Record<string, "success" | "secondary" | "destructive"> = {
-  SOLVED: "success",
-  REVEALED: "secondary",
-  EXPIRED: "destructive",
 };
 
 function LeaderboardRow({ entry, isMe }: { entry: LeaderboardEntry; isMe: boolean }) {
@@ -133,8 +122,8 @@ export function RoomHistory({ history }: { history: RoundSummary[] }) {
               <p className="text-muted-foreground font-mono text-[11px]">Rodada {round.number}</p>
               <p className="truncate text-sm font-medium">{round.enigmaTitle}</p>
             </div>
-            <Badge variant={STATUS_VARIANT[round.status] ?? "secondary"}>
-              {STATUS_LABEL[round.status] ?? round.status}
+            <Badge variant={ROUND_STATUS_TONE[round.status] ?? "secondary"}>
+              {ROUND_STATUS_LABEL[round.status] ?? round.status}
             </Badge>
           </div>
 

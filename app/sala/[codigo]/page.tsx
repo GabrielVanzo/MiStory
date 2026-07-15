@@ -5,6 +5,9 @@ import { RoomView } from "@/features/room/room-view";
 
 export const metadata: Metadata = {
   title: "Sala",
+  // A room code is the only thing gating entry, so a room URL must never end up
+  // in a search index.
+  robots: { index: false, follow: false },
 };
 
 export default async function SalaPage({ params }: { params: Promise<{ codigo: string }> }) {

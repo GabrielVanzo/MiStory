@@ -2,7 +2,9 @@ import { prisma } from "../../lib/prisma";
 import type { FinishRoundInput, PublicRound, RoundSecret } from "../../lib/realtime/events";
 import { RealtimeError } from "../../lib/realtime/events";
 import { isFinishedRoundStatus } from "../../types/game";
+import { asDifficulty, asRoundStatus } from "./db-enums";
 import { RoomError } from "./errors";
+import { asId } from "./input";
 import { getGuesses } from "./guesses";
 import { getQuestions } from "./questions";
 import { awardSolve } from "./scores";
@@ -56,12 +58,12 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
   return {
     id: round.id,
     number: round.number,
-    status: round.status,
+    status: asRoundStatus(round.status),
     masterId: round.masterId,
     solvedById: round.solvedById,
     // A finished round has no deadline left to count down to.
     expiresAt: finished ? null : (round.expiresAt?.toISOString() ?? null),
-    enigma: round.enigma,
+    enigma: { ...round.enigma, difficulty: asDifficulty(round.enigma.difficulty) },
     reveal: finished ? await buildReveal(round.id) : null,
     questions: await getQuestions(round.id),
     guesses: await getGuesses(round.id),
@@ -69,7 +71,7 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
 }
 
 /** SECRET — resolve the answer/explanation for a round. Host delivery only. */
-export async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
+async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
   const round = await prisma.round.findUnique({
     where: { id: roundId },
     select: { id: true, enigma: { select: { solution: true, explanation: true } } },
@@ -219,7 +221,7 @@ export async function finishRound(
   let solvedById: string | null = null;
   if (outcome === "SOLVED" && input.solvedById) {
     const solver = await prisma.player.findUnique({
-      where: { id: input.solvedById },
+      where: { id: asId(input.solvedById) },
       select: { id: true, roomId: true },
     });
     if (!solver || solver.roomId !== roomId) throw new RoomError(RealtimeError.INVALID_INPUT);

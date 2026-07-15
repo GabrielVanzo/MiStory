@@ -8,7 +8,11 @@ import { joinRoom, realtimeErrorMessage } from "@/lib/realtime/actions";
 import { clearIdentity, loadIdentity, saveIdentity } from "@/lib/realtime/identity";
 import { getSocket } from "@/lib/realtime/socket";
 
-type Phase = "loading" | "needs-join" | "joined" | "closed";
+/**
+ * `unreachable` exists because a realtime server that is simply down used to
+ * leave the room stuck on the loading skeleton forever — no error, no retry.
+ */
+type Phase = "loading" | "needs-join" | "joined" | "closed" | "unreachable";
 type Connection = "connecting" | "connected" | "reconnecting";
 
 interface RoomContextValue {
@@ -29,6 +33,8 @@ interface RoomContextValue {
   busy: boolean;
   error: string | null;
   join: (nickname: string) => Promise<void>;
+  /** Retry after the server was unreachable. */
+  retry: () => void;
   leave: () => Promise<void>;
   startRound: () => Promise<void>;
   finishRound: (outcome: FinishOutcome, solvedById?: string) => Promise<void>;
@@ -105,6 +111,11 @@ export function RoomProvider({ code, children }: { code: string; children: React
     },
     [code],
   );
+
+  const retry = useCallback(() => {
+    setPhase("loading");
+    getSocket().connect();
+  }, []);
 
   const leave = useCallback(async () => {
     const socket = getSocket();
@@ -239,12 +250,19 @@ export function RoomProvider({ code, children }: { code: string; children: React
       else setPhase((p) => (p === "joined" ? p : "needs-join"));
     };
     const onDisconnect = () => setConnection("reconnecting");
+    // The server is down / unreachable. Socket.IO keeps retrying in the
+    // background, but the player deserves to be told rather than stare at a
+    // skeleton. A later successful `connect` flips us back automatically.
+    const onConnectError = () => {
+      setPhase((p) => (p === "joined" ? p : "unreachable"));
+    };
 
     socket.on("room:state", onState);
     socket.on("round:secret", onSecret);
     socket.on("room:closed", onClosed);
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
 
     // Initial connection state is already "connecting" (see useState default).
     if (socket.connected) onConnect();
@@ -256,6 +274,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
       socket.off("room:closed", onClosed);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
+      socket.off("connect_error", onConnectError);
     };
   }, [code, resume]);
 
@@ -273,6 +292,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
     busy,
     error,
     join,
+    retry,
     leave,
     startRound,
     finishRound,

@@ -15,7 +15,14 @@ function createPrismaClient(): PrismaClient {
 
   return new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+    // PRISMA_LOG=query surfaces every statement — useful to count queries per
+    // action when tuning. Off by default.
+    log:
+      process.env.PRISMA_LOG === "query"
+        ? ["query", "warn", "error"]
+        : process.env.NODE_ENV === "development"
+          ? ["warn", "error"]
+          : ["error"],
   });
 }
 

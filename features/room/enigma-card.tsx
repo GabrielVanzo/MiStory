@@ -4,39 +4,20 @@ import { useState } from "react";
 import { EyeIcon, EyeOffIcon, LockIcon, TimerIcon, UnlockIcon } from "lucide-react";
 
 import type { PublicRound, RoundSecret } from "@/lib/realtime/events";
-import { formatCountdown, useCountdown } from "@/hooks/use-countdown";
+import { useCountdown } from "@/hooks/use-countdown";
+import { formatCountdown } from "@/utils/format";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import {
+  DIFFICULTY_LABEL,
+  DIFFICULTY_TONE,
+  ROUND_STATUS_LABEL,
+  ROUND_STATUS_TONE,
+} from "@/features/room/labels";
 import { useRoom } from "@/features/room/room-provider";
-
-const LEVEL_LABEL: Record<string, string> = {
-  EASY: "Fácil",
-  MEDIUM: "Médio",
-  HARD: "Difícil",
-};
-
-const LEVEL_VARIANT: Record<string, "success" | "warning" | "destructive"> = {
-  EASY: "success",
-  MEDIUM: "warning",
-  HARD: "destructive",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  ACTIVE: "Em andamento",
-  SOLVED: "Resolvido",
-  REVEALED: "Revelado",
-  EXPIRED: "Tempo esgotado",
-};
-
-const STATUS_VARIANT: Record<string, "info" | "success" | "secondary" | "destructive"> = {
-  ACTIVE: "info",
-  SOLVED: "success",
-  REVEALED: "secondary",
-  EXPIRED: "destructive",
-};
 
 /** Server-driven countdown. Purely a readout of the deadline the server set. */
 function RoundTimer({ expiresAt }: { expiresAt: string }) {
@@ -49,7 +30,7 @@ function RoundTimer({ expiresAt }: { expiresAt: string }) {
     <div
       className={cn(
         "flex items-center gap-1.5 font-mono text-sm tabular-nums",
-        urgent ? "text-destructive" : "text-muted-foreground",
+        urgent ? "text-destructive animate-pulse" : "text-muted-foreground",
       )}
       aria-live={urgent ? "polite" : "off"}
     >
@@ -74,12 +55,10 @@ export function EnigmaCard({ round }: { round: PublicRound }) {
           </div>
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
-              <Badge variant={STATUS_VARIANT[round.status] ?? "secondary"}>
-                {STATUS_LABEL[round.status] ?? round.status}
+              <Badge variant={ROUND_STATUS_TONE[round.status] ?? "secondary"}>
+                {ROUND_STATUS_LABEL[round.status] ?? round.status}
               </Badge>
-              <Badge variant={LEVEL_VARIANT[level] ?? "secondary"}>
-                {LEVEL_LABEL[level] ?? level}
-              </Badge>
+              <Badge variant={DIFFICULTY_TONE[level]}>{DIFFICULTY_LABEL[level]}</Badge>
             </div>
             {round.status === "ACTIVE" && round.expiresAt ? (
               <RoundTimer expiresAt={round.expiresAt} />
@@ -161,7 +140,7 @@ export function RoundRevealPanel({ round }: { round: PublicRound }) {
     : undefined;
 
   return (
-    <Card className="ring-primary/25 bg-primary/5">
+    <Card className="ring-primary/25 bg-primary/5 animate-in fade-in zoom-in-95 duration-500">
       <CardHeader>
         <CardTitle className="text-primary flex items-center gap-2 text-sm">
           <UnlockIcon className="size-3.5" />

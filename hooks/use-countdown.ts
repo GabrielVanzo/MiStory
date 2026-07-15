@@ -26,11 +26,3 @@ export function useCountdown(expiresAt: string | null, offsetMs = 0): number | n
   if (!expiresAt || now === null) return null;
   return Math.max(0, new Date(expiresAt).getTime() - (now + offsetMs));
 }
-
-/** Formats milliseconds as mm:ss. */
-export function formatCountdown(ms: number): string {
-  const total = Math.ceil(ms / 1000);
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}

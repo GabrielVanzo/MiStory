@@ -2,7 +2,9 @@ import { prisma } from "../../lib/prisma";
 import type { AnswerQuestionInput, AskQuestionInput, QuestionDTO } from "../../lib/realtime/events";
 import { RealtimeError } from "../../lib/realtime/events";
 import { isAnswerValue } from "../../types/game";
+import { asAnswerValue } from "./db-enums";
 import { RoomError } from "./errors";
+import { asId, asText } from "./input";
 import { requireActiveRound } from "./round-utils";
 
 const QUESTION_MAX = 200;
@@ -33,7 +35,7 @@ function toQuestionDTO(q: QuestionRow): QuestionDTO {
     content: q.content,
     createdAt: q.createdAt.toISOString(),
     answer: q.answer
-      ? { value: q.answer.value, createdAt: q.answer.createdAt.toISOString() }
+      ? { value: asAnswerValue(q.answer.value), createdAt: q.answer.createdAt.toISOString() }
       : null,
   };
 }
@@ -57,7 +59,7 @@ export async function askQuestion(
   playerId: string,
   input: AskQuestionInput,
 ): Promise<QuestionDTO> {
-  const content = typeof input?.content === "string" ? input.content.trim() : "";
+  const content = asText(input?.content, QUESTION_MAX);
   if (!content) throw new RoomError(RealtimeError.INVALID_INPUT);
 
   const player = await prisma.player.findUnique({
@@ -75,7 +77,7 @@ export async function askQuestion(
       playerId: player.id,
       // Snapshot: the log must stay readable even if this player leaves later.
       authorName: player.nickname,
-      content: content.slice(0, QUESTION_MAX),
+      content,
     },
     select: QUESTION_SELECT,
   });
@@ -106,7 +108,8 @@ export async function answerQuestion(
 
   // The question must belong to this room's active round.
   const question = await prisma.question.findFirst({
-    where: { id: input?.questionId, roundId: round.id },
+    // asId: a raw value here would let a client inject a Prisma operator.
+    where: { id: asId(input?.questionId), roundId: round.id },
     select: { id: true },
   });
   if (!question) throw new RoomError(RealtimeError.QUESTION_NOT_FOUND);

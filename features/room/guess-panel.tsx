@@ -5,7 +5,6 @@ import { CheckIcon, LightbulbIcon, TrophyIcon, XIcon } from "lucide-react";
 
 import type { GuessDTO, PublicRound } from "@/lib/realtime/events";
 import { cn } from "@/lib/utils";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,13 +21,10 @@ import {
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { PlayerAvatar } from "@/features/room/player-avatar";
 import { useRoom } from "@/features/room/room-provider";
 
 const GUESS_MAX = 300;
-
-function initials(name: string) {
-  return name.slice(0, 2).toUpperCase();
-}
 
 /**
  * The "Já sei." button + modal. Each detective gets exactly one shot per round;
@@ -146,7 +142,7 @@ function GuessRow({
   return (
     <li
       className={cn(
-        "rounded-xl px-3 py-2.5 transition-colors",
+        "animate-in fade-in slide-in-from-bottom-2 rounded-xl px-3 py-2.5 transition-colors duration-300",
         isWinner && "bg-success/10 ring-success/25 ring-1",
         !isWinner &&
           guess.status === "PENDING" &&
@@ -156,14 +152,7 @@ function GuessRow({
       )}
     >
       <div className="flex items-start gap-3">
-        <Avatar size="sm" className="mt-0.5 shrink-0">
-          <AvatarFallback
-            style={color ? { backgroundColor: `${color}22`, color } : undefined}
-            className="text-[10px]"
-          >
-            {initials(guess.authorName)}
-          </AvatarFallback>
-        </Avatar>
+        <PlayerAvatar name={guess.authorName} color={color} className="mt-0.5" />
 
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-center gap-2">

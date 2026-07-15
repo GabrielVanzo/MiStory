@@ -1,7 +1,9 @@
 import { prisma } from "../../lib/prisma";
 import type { GuessDTO, ResolveGuessInput, SubmitGuessInput } from "../../lib/realtime/events";
 import { RealtimeError } from "../../lib/realtime/events";
-import { RoomError } from "./errors";
+import { asGuessStatus } from "./db-enums";
+import { isUniqueViolation, RoomError } from "./errors";
+import { asId, asText } from "./input";
 import { requireActiveRound } from "./round-utils";
 import { awardWrongGuess } from "./scores";
 
@@ -33,20 +35,10 @@ function toGuessDTO(g: GuessRow): GuessDTO {
     playerId: g.playerId,
     authorName: g.authorName,
     content: g.content,
-    status: g.status,
+    status: asGuessStatus(g.status),
     createdAt: g.createdAt.toISOString(),
     resolvedAt: g.resolvedAt?.toISOString() ?? null,
   };
-}
-
-/** Prisma unique-constraint violation (the single-shot rule at DB level). */
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  );
 }
 
 /** The round's guesses, oldest first. Public — everyone hears the shot. */
@@ -69,7 +61,7 @@ export async function submitGuess(
   playerId: string,
   input: SubmitGuessInput,
 ): Promise<GuessDTO> {
-  const content = typeof input?.content === "string" ? input.content.trim() : "";
+  const content = asText(input?.content, GUESS_MAX);
   if (!content) throw new RoomError(RealtimeError.INVALID_INPUT);
 
   const player = await prisma.player.findUnique({
@@ -96,7 +88,7 @@ export async function submitGuess(
         roundId: round.id,
         playerId: player.id,
         authorName: player.nickname,
-        content: content.slice(0, GUESS_MAX),
+        content,
         status: "PENDING",
       },
       select: GUESS_SELECT,
@@ -136,7 +128,8 @@ export async function resolveGuess(
   const round = await requireActiveRound(roomId);
 
   const guess = await prisma.guess.findFirst({
-    where: { id: input?.guessId, roundId: round.id },
+    // asId: a raw value here would let a client inject a Prisma operator.
+    where: { id: asId(input?.guessId), roundId: round.id },
     select: { id: true, status: true, playerId: true },
   });
   if (!guess) throw new RoomError(RealtimeError.GUESS_NOT_FOUND);

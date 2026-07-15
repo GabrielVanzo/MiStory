@@ -55,6 +55,15 @@ httpServer.listen(PORT, () => {
   );
 });
 
+// A realtime server is long-lived: an unexpected rejection anywhere must be
+// logged and contained, never take every live room down with it.
+process.on("unhandledRejection", (reason) => {
+  console.error("[realtime] unhandled rejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[realtime] uncaught exception:", error);
+});
+
 function shutdown(): void {
   io.close();
   httpServer.close(() => process.exit(0));

@@ -3,13 +3,22 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CopyIcon, CrownIcon, GhostIcon, LogOutIcon, SparklesIcon, UsersIcon } from "lucide-react";
+import {
+  CopyIcon,
+  CrownIcon,
+  GhostIcon,
+  LogOutIcon,
+  PlugZapIcon,
+  RotateCcwIcon,
+  SparklesIcon,
+  UsersIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type { PlayerDTO } from "@/lib/realtime/events";
 import { Brand } from "@/components/layout/brand";
 import { StatusScreen } from "@/components/layout/status-screen";
-import { Avatar, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
+import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,17 +30,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EnigmaCard, HostSecretPanel, RoundRevealPanel } from "@/features/room/enigma-card";
 import { GuessButton, GuessPanel } from "@/features/room/guess-panel";
 import { HostControls } from "@/features/room/host-controls";
+import { PlayerAvatar } from "@/features/room/player-avatar";
 import { Leaderboard, RoomHistory } from "@/features/room/leaderboard";
 import { AskBar, QuestionFeed } from "@/features/room/question-feed";
 import { useRoom } from "@/features/room/room-provider";
-
-function fallbackStyle(color: string | null) {
-  return color ? { backgroundColor: `${color}22`, color } : undefined;
-}
-
-function initials(nickname: string) {
-  return nickname.slice(0, 2).toUpperCase();
-}
+import { RoomSkeleton } from "@/features/room/room-skeleton";
+import { useRoomEvents } from "@/features/room/use-room-events";
 
 /** Gate shown when opening a room link without a stored identity. */
 function JoinGate() {
@@ -87,11 +91,7 @@ function PlayerRow({ player, isMe }: { player: PlayerDTO; isMe: boolean }) {
   return (
     <li className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2 transition-colors">
       <span className="relative">
-        <Avatar size="sm">
-          <AvatarFallback style={fallbackStyle(player.color)}>
-            {initials(player.nickname)}
-          </AvatarFallback>
-        </Avatar>
+        <PlayerAvatar name={player.nickname} color={player.color} />
         <span
           aria-hidden
           className={
@@ -116,15 +116,29 @@ function PlayerRow({ player, isMe }: { player: PlayerDTO; isMe: boolean }) {
 
 export function RoomView() {
   const router = useRouter();
-  const { phase, connection, room, me, isHost, secret, busy, error, leave, startRound } = useRoom();
+  const { phase, connection, room, me, isHost, secret, busy, error, leave, retry, startRound } =
+    useRoom();
   const [leaving, setLeaving] = useState(false);
+  // Announces what changed (joins, answers, round end...) as toasts.
+  useRoomEvents();
 
-  if (phase === "loading") {
+  if (phase === "loading") return <RoomSkeleton />;
+
+  if (phase === "unreachable") {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-24">
-        <Spinner size="lg" className="text-primary" />
-        <p className="text-muted-foreground text-sm">Conectando à sala...</p>
-      </main>
+      <StatusScreen
+        media={<PlugZapIcon />}
+        mediaClassName="bg-destructive/10 text-destructive ring-destructive/20"
+        title="Sem conexão com o servidor"
+        description="Não conseguimos falar com o servidor da partida. Verifique sua conexão e tente novamente."
+      >
+        <Button onClick={retry}>
+          <RotateCcwIcon /> Tentar novamente
+        </Button>
+        <Button asChild variant="outline">
+          <Link href="/">Início</Link>
+        </Button>
+      </StatusScreen>
     );
   }
 
@@ -179,9 +193,10 @@ export function RoomView() {
               <button
                 type="button"
                 onClick={copyCode}
-                className="text-muted-foreground hover:text-foreground flex items-center gap-1 font-mono text-xs transition-colors"
+                aria-label={`Copiar o código da sala, ${room.code}`}
+                className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex items-center gap-1 rounded font-mono text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
               >
-                {room.code} <CopyIcon className="size-3" />
+                {room.code} <CopyIcon className="size-3" aria-hidden />
               </button>
             </div>
           </div>
@@ -189,11 +204,7 @@ export function RoomView() {
           <div className="flex items-center gap-3">
             <AvatarGroup className="hidden sm:flex">
               {room.players.slice(0, 4).map((p) => (
-                <Avatar key={p.id} size="sm">
-                  <AvatarFallback style={fallbackStyle(p.color)}>
-                    {initials(p.nickname)}
-                  </AvatarFallback>
-                </Avatar>
+                <PlayerAvatar key={p.id} name={p.nickname} color={p.color} />
               ))}
               {room.players.length > 4 ? (
                 <AvatarGroupCount>+{room.players.length - 4}</AvatarGroupCount>

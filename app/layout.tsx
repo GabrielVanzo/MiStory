@@ -15,12 +15,26 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const DESCRIPTION = "Jogo de enigmas multiplayer em tempo real.";
+
 export const metadata: Metadata = {
+  // Required for OG/canonical URLs to resolve absolutely in production.
+  metadataBase: new URL(SITE_URL),
   title: {
     default: "Black Stories",
     template: "%s · Black Stories",
   },
-  description: "Jogo de enigmas multiplayer em tempo real.",
+  description: DESCRIPTION,
+  applicationName: "Black Stories",
+  openGraph: {
+    type: "website",
+    siteName: "Black Stories",
+    title: "Black Stories",
+    description: DESCRIPTION,
+    locale: "pt_BR",
+  },
+  twitter: { card: "summary_large_image", title: "Black Stories", description: DESCRIPTION },
 };
 
 export default function RootLayout({

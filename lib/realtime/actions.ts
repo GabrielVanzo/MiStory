@@ -1,25 +1,52 @@
 "use client";
 
-import type { Ack, CreateRoomInput, JoinRoomInput, RoomJoinedPayload } from "@/lib/realtime/events";
+import type {
+  Ack,
+  CreateRoomInput,
+  JoinRoomInput,
+  RealtimeErrorCode,
+  RoomJoinedPayload,
+} from "@/lib/realtime/events";
 import { getSocket } from "@/lib/realtime/socket";
 
-const MESSAGES: Record<string, string> = {
+/**
+ * Every error the server can return, in words a player understands.
+ *
+ * Typed as a full `Record<RealtimeErrorCode, …>` on purpose: adding a code to
+ * the contract without writing a message here is a compile error. Ten codes
+ * used to fall through to a generic "Algo deu errado" — including reachable
+ * ones like NO_ENIGMAS and GUESS_ALREADY_USED.
+ */
+const MESSAGES: Record<RealtimeErrorCode, string> = {
   ROOM_NOT_FOUND: "Sala não encontrada. Confira o código.",
   ROOM_FULL: "A sala está cheia.",
   NICKNAME_TAKEN: "Esse apelido já está em uso nesta sala.",
-  WRONG_PASSWORD: "Senha incorreta.",
   INVALID_INPUT: "Verifique os dados informados.",
   NOT_IN_ROOM: "Você não está em uma sala.",
+  FORBIDDEN: "Apenas o anfitrião pode fazer isso.",
+  ROUND_IN_PROGRESS: "Já existe uma rodada em andamento.",
+  NO_ACTIVE_ROUND: "Nenhuma rodada em andamento.",
+  NO_ENIGMAS: "Nenhum enigma disponível. Rode `npm run db:seed` para carregar o catálogo.",
+  QUESTION_NOT_FOUND: "Essa pergunta não existe mais.",
+  HOST_CANNOT_ASK: "O mestre conduz a rodada — quem pergunta são os detetives.",
+  HOST_CANNOT_GUESS: "O mestre já conhece a resposta.",
+  GUESS_ALREADY_USED: "Você já usou seu único chute nesta rodada.",
+  GUESS_NOT_FOUND: "Esse chute não existe mais.",
+  GUESS_ALREADY_RESOLVED: "Esse chute já foi julgado.",
+  RATE_LIMITED: "Calma lá! Muitas ações em pouco tempo. Aguarde um instante.",
   INTERNAL: "Algo deu errado. Tente novamente.",
-  CONNECT_ERROR: "Não foi possível conectar ao servidor.",
 };
 
+/** Client-side failure, not returned by the server. */
+const CONNECT_ERROR_MESSAGE = "Não foi possível conectar ao servidor.";
+
 export function realtimeErrorMessage(code: string): string {
-  return MESSAGES[code] ?? MESSAGES.INTERNAL;
+  if (code === "CONNECT_ERROR") return CONNECT_ERROR_MESSAGE;
+  return MESSAGES[code as RealtimeErrorCode] ?? MESSAGES.INTERNAL;
 }
 
 /** Ensure the socket is connected before emitting. */
-export function ensureConnected(): Promise<void> {
+function ensureConnected(): Promise<void> {
   const socket = getSocket();
   if (socket.connected) return Promise.resolve();
   return new Promise((resolve, reject) => {

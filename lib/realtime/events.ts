@@ -3,9 +3,17 @@
  * realtime server. Types only — safe to import from both sides (Next via the
  * "@/" alias, the tsx server via a relative path).
  *
- * Stage 5 scope: rooms, players, presence, host, reconnection, sync.
- * No match/round/question logic yet.
+ * Domain values use the unions from `types/game` rather than bare `string`, so
+ * a client `switch`/lookup over them is exhaustive at compile time.
  */
+
+import type {
+  AnswerValue,
+  Difficulty,
+  GuessStatus,
+  RoomStatus,
+  RoundStatus,
+} from "../../types/game";
 
 /** Public projection of a Player row sent to clients. */
 export interface PlayerDTO {
@@ -26,7 +34,7 @@ export interface PublicEnigma {
   title: string;
   /** The scene ("introdução") — safe for everyone. */
   teaser: string;
-  difficulty: string;
+  difficulty: Difficulty;
 }
 
 /**
@@ -47,8 +55,8 @@ export interface QuestionDTO {
   authorName: string;
   content: string;
   createdAt: string;
-  /** YES | NO | IRRELEVANT — null while awaiting the host. */
-  answer: { value: string; createdAt: string } | null;
+  /** Null while awaiting the host. */
+  answer: { value: AnswerValue; createdAt: string } | null;
 }
 
 /** A player's single shot at the solution ("chute"), judged by the host. */
@@ -58,8 +66,7 @@ export interface GuessDTO {
   playerId: string | null;
   authorName: string;
   content: string;
-  /** PENDING | ACCEPTED | REJECTED. */
-  status: string;
+  status: GuessStatus;
   createdAt: string;
   resolvedAt: string | null;
 }
@@ -68,8 +75,7 @@ export interface GuessDTO {
 export interface PublicRound {
   id: string;
   number: number;
-  /** ACTIVE | SOLVED | REVEALED | EXPIRED (see types/game.ts). */
-  status: string;
+  status: RoundStatus;
   /** The player narrating this round (the host). */
   masterId: string | null;
   enigma: PublicEnigma;
@@ -119,8 +125,7 @@ export interface RoundSummary {
   id: string;
   number: number;
   enigmaTitle: string;
-  /** SOLVED | REVEALED | EXPIRED. */
-  status: string;
+  status: RoundStatus;
   /** Who cracked it (name snapshot), null when nobody did. */
   winnerName: string | null;
   questionCount: number;
@@ -133,7 +138,7 @@ export interface RoomState {
   id: string;
   code: string;
   name: string;
-  status: string;
+  status: RoomStatus;
   isPrivate: boolean;
   maxPlayers: number;
   hostId: string | null;
@@ -156,13 +161,11 @@ export interface CreateRoomInput {
   nickname: string;
   isPrivate?: boolean;
   maxPlayers?: number;
-  password?: string;
 }
 
 export interface JoinRoomInput {
   code: string;
   nickname: string;
-  password?: string;
   /** Present when resuming an existing identity (reconnection / revisit). */
   sessionToken?: string;
 }
@@ -227,7 +230,7 @@ export interface AskQuestionInput {
 
 export interface AnswerQuestionInput {
   questionId: string;
-  /** YES | NO | IRRELEVANT — anything else is rejected. */
+  /** Validated server-side; anything outside AnswerValue is rejected. */
   value: string;
 }
 
@@ -254,7 +257,6 @@ export const RealtimeError = {
   ROOM_NOT_FOUND: "ROOM_NOT_FOUND",
   ROOM_FULL: "ROOM_FULL",
   NICKNAME_TAKEN: "NICKNAME_TAKEN",
-  WRONG_PASSWORD: "WRONG_PASSWORD",
   INVALID_INPUT: "INVALID_INPUT",
   NOT_IN_ROOM: "NOT_IN_ROOM",
   /** Action requires being the host. */
@@ -271,6 +273,8 @@ export const RealtimeError = {
   GUESS_ALREADY_USED: "GUESS_ALREADY_USED",
   GUESS_NOT_FOUND: "GUESS_NOT_FOUND",
   GUESS_ALREADY_RESOLVED: "GUESS_ALREADY_RESOLVED",
+  /** Too many actions too fast — the server budget, not a UI guard. */
+  RATE_LIMITED: "RATE_LIMITED",
   INTERNAL: "INTERNAL",
 } as const;
 

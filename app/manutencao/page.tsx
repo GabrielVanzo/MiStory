@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 
 export const metadata: Metadata = {
   title: "Em manutenção",
+  robots: { index: false, follow: false },
 };
 
 export default function ManutencaoPage() {

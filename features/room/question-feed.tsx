@@ -12,11 +12,11 @@ import {
 
 import type { PublicRound, QuestionDTO } from "@/lib/realtime/events";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/utils/format";
 import { ANSWER_VALUES, type AnswerValue } from "@/types/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   EmptyState,
   EmptyStateDescription,
@@ -25,40 +25,37 @@ import {
 } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { ANSWER_LABEL, ANSWER_TONE } from "@/features/room/labels";
+import { PlayerAvatar } from "@/features/room/player-avatar";
 import { useRoom } from "@/features/room/room-provider";
 
 const QUESTION_MAX = 200;
 
-const ANSWER_META: Record<
-  AnswerValue,
-  {
-    label: string;
-    icon: typeof CheckIcon;
-    badge: "success" | "destructive" | "secondary";
-    active: string;
-  }
-> = {
-  YES: { label: "Sim", icon: CheckIcon, badge: "success", active: "bg-success/15 text-success" },
-  NO: {
-    label: "Não",
-    icon: XIcon,
-    badge: "destructive",
-    active: "bg-destructive/15 text-destructive",
-  },
-  IRRELEVANT: {
-    label: "Irrelevante",
-    icon: CircleSlashIcon,
-    badge: "secondary",
-    active: "bg-muted text-muted-foreground",
-  },
+/**
+ * Only what is specific to this view: the icon and the "selected" styling.
+ * The words and the badge colour come from the shared vocabulary, so the feed,
+ * the toasts and the rest of the room can never disagree about what "NO" means.
+ */
+const ANSWER_ICON: Record<AnswerValue, typeof CheckIcon> = {
+  YES: CheckIcon,
+  NO: XIcon,
+  IRRELEVANT: CircleSlashIcon,
 };
 
-function timeOf(iso: string) {
-  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-}
+const ANSWER_ACTIVE: Record<AnswerValue, string> = {
+  YES: "bg-success/15 text-success",
+  NO: "bg-destructive/15 text-destructive",
+  IRRELEVANT: "bg-muted text-muted-foreground",
+};
 
-function initials(name: string) {
-  return name.slice(0, 2).toUpperCase();
+/** The master's reply, shown the same way everywhere. */
+function AnswerBadge({ value }: { value: AnswerValue }) {
+  const Icon = ANSWER_ICON[value];
+  return (
+    <Badge variant={ANSWER_TONE[value]} className="gap-1">
+      <Icon /> {ANSWER_LABEL[value]}
+    </Badge>
+  );
 }
 
 /** Host's segmented control — the current answer stays highlighted and can be changed. */
@@ -77,9 +74,8 @@ function AnswerPicker({ question }: { question: QuestionDTO }) {
   return (
     <div className="bg-muted/40 ring-border inline-flex items-center gap-0.5 rounded-lg p-0.5 ring-1">
       {ANSWER_VALUES.map((value) => {
-        const meta = ANSWER_META[value];
         const isCurrent = current === value;
-        const Icon = meta.icon;
+        const Icon = ANSWER_ICON[value];
         return (
           <Button
             key={value}
@@ -88,10 +84,10 @@ function AnswerPicker({ question }: { question: QuestionDTO }) {
             aria-pressed={isCurrent}
             disabled={pending !== null}
             onClick={() => pick(value)}
-            className={cn("gap-1", isCurrent && meta.active)}
+            className={cn("gap-1", isCurrent && ANSWER_ACTIVE[value])}
           >
             {pending === value ? <Spinner size="xs" /> : <Icon />}
-            {meta.label}
+            {ANSWER_LABEL[value]}
           </Button>
         );
       })}
@@ -110,25 +106,18 @@ function QuestionRow({
   isMine: boolean;
   canAnswer: boolean;
 }) {
-  const answered = question.answer ? ANSWER_META[question.answer.value as AnswerValue] : null;
+  const answer = question.answer;
 
   return (
     <li
       className={cn(
-        "rounded-xl px-3 py-2.5 transition-colors",
+        "animate-in fade-in slide-in-from-bottom-2 rounded-xl px-3 py-2.5 transition-colors duration-300",
         // Unanswered questions stand out for the host: they need action.
         !question.answer && canAnswer ? "bg-warning/5 ring-warning/20 ring-1" : "hover:bg-muted/40",
       )}
     >
       <div className="flex items-start gap-3">
-        <Avatar size="sm" className="mt-0.5 shrink-0">
-          <AvatarFallback
-            style={color ? { backgroundColor: `${color}22`, color } : undefined}
-            className="text-[10px]"
-          >
-            {initials(question.authorName)}
-          </AvatarFallback>
-        </Avatar>
+        <PlayerAvatar name={question.authorName} color={color} className="mt-0.5" />
 
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-baseline gap-2">
@@ -137,7 +126,7 @@ function QuestionRow({
               {isMine ? <span className="text-muted-foreground ml-1 text-xs">(você)</span> : null}
             </span>
             <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
-              {timeOf(question.createdAt)}
+              {formatTime(question.createdAt)}
             </span>
           </div>
 
@@ -146,10 +135,8 @@ function QuestionRow({
           <div className="flex items-center gap-2 pt-0.5">
             {canAnswer ? (
               <AnswerPicker question={question} />
-            ) : answered ? (
-              <Badge variant={answered.badge} className="gap-1">
-                <answered.icon /> {answered.label}
-              </Badge>
+            ) : answer ? (
+              <AnswerBadge value={answer.value} />
             ) : (
               <span className="text-muted-foreground flex items-center gap-1 text-xs">
                 <ClockIcon className="size-3" /> Aguardando o mestre...
@@ -208,7 +195,9 @@ export function QuestionFeed({ round }: { round: PublicRound }) {
           </div>
         ) : (
           <div ref={scrollRef} className="h-full max-h-[28rem] overflow-y-auto px-2">
-            <ul className="space-y-1 pb-2">
+            {/* Answers land without any action from the reader, so they must be
+                announced rather than silently appear. */}
+            <ul className="space-y-1 pb-2" aria-live="polite" aria-relevant="additions text">
               {round.questions.map((q) => (
                 <QuestionRow
                   key={q.id}

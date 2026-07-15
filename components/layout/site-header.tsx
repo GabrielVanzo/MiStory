@@ -13,9 +13,6 @@ function SiteHeader() {
           <Button asChild variant="ghost" size="sm">
             <Link href="/#como-jogar">Como jogar</Link>
           </Button>
-          <Button asChild variant="ghost" size="sm">
-            <Link href="/design">Design</Link>
-          </Button>
         </nav>
 
         <div className="flex items-center gap-2">

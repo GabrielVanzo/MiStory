@@ -1,6 +1,7 @@
 import { prisma } from "../../lib/prisma";
 import type { LeaderboardEntry, RoundSummary } from "../../lib/realtime/events";
 import { SCORE_POINTS, type ScoreReason } from "../../types/game";
+import { asRoundStatus } from "./db-enums";
 
 /**
  * Append a point event to the ledger. The ledger is append-only: totals are
@@ -148,7 +149,7 @@ export async function getHistory(roomId: string): Promise<RoundSummary[]> {
     id: round.id,
     number: round.number,
     enigmaTitle: round.enigma.title,
-    status: round.status,
+    status: asRoundStatus(round.status),
     winnerName: round.scores[0]?.playerName ?? null,
     questionCount: round._count.questions,
     guessCount: round._count.guesses,

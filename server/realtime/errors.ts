@@ -11,3 +11,17 @@ export class RoomError extends Error {
     this.name = "RoomError";
   }
 }
+
+/**
+ * Prisma unique-constraint violation (P2002), detected structurally so we do
+ * not have to import Prisma's error classes. Shared: both room joins and
+ * guesses rely on a unique index as their source of truth.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
+}
