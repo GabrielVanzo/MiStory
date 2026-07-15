@@ -16,14 +16,16 @@ os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
 
 ## Requisitos
 
-- **Node.js 26** — a versão está fixada em `.nvmrc` (e declarada em `engines`).
-  Com nvm: `nvm use` na raiz do projeto.
+- **Node.js 24 (LTS)** — fixado em `.nvmrc` e em `engines`. Com nvm: `nvm use` na raiz.
+  A versão é a mesma nos três lugares — `.nvmrc`, `engines` e o `Dockerfile` — de propósito:
+  é a maior que a Vercel suporta, é LTS, e manter tudo alinhado evita o erro de ABI abaixo.
 - npm
 
 > ⚠️ **Trocou de versão do Node? Rode `npm rebuild better-sqlite3`.**
 > O `better-sqlite3` é um módulo **nativo**: o binário é compilado contra o ABI de uma
 > versão específica do Node. Rodar com outra versão gera um erro de runtime confuso
 > (`NODE_MODULE_VERSION 137 ... requires 147`) — não é bug do código, é só recompilar.
+> Rodar `nvm use` na raiz evita isso: você sempre pega a versão certa.
 
 ## Setup
 

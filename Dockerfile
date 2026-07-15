@@ -4,7 +4,7 @@
 # This image exists because a WebSocket server needs a process that stays up,
 # which serverless platforms cannot provide.
 
-FROM node:26-slim AS base
+FROM node:24-slim AS base
 
 # better-sqlite3 is a native module: it is compiled from source during install,
 # so the image needs a toolchain. Building inside the image also guarantees the
