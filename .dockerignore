@@ -1,0 +1,18 @@
+# The image is built from source; these must never be copied in.
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+
+# The local dev database must not ship inside the image — production data lives
+# on the mounted volume.
+prisma/*.db
+prisma/*.db-journal
+
+# Generated at build time by `prisma generate` (postinstall).
+lib/generated
+
+npm-debug.log*
+.DS_Store

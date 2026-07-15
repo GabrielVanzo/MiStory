@@ -12,8 +12,23 @@ import { registerRealtimeHandlers, resumeRoundTimers, startSweeper } from "./ser
 import { REALTIME_CONFIG } from "./server/realtime/config";
 import { markAllPlayersDisconnected } from "./server/realtime/rooms";
 
-const PORT = Number(process.env.SOCKET_PORT ?? 3001);
-const ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
+/**
+ * Hosting platforms (Railway, Render, Fly, Heroku…) inject `PORT` and route
+ * traffic to it — honouring it is what makes the service reachable there.
+ * `SOCKET_PORT` stays as the local-dev knob.
+ */
+const PORT = Number(process.env.PORT ?? process.env.SOCKET_PORT ?? 3001);
+
+/**
+ * Allowed browser origins, comma-separated. A list rather than a single value
+ * because a real deploy has more than one: the platform URL and the custom
+ * domain (and they change at different times).
+ *   CLIENT_ORIGIN="https://black-stories.vercel.app,https://seujogo.com.br"
+ */
+const ORIGINS = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, "")) // a trailing slash never matches
+  .filter(Boolean);
 
 const httpServer = createServer((req, res) => {
   if (req.url === "/health") {
@@ -28,7 +43,7 @@ const httpServer = createServer((req, res) => {
 const io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>(
   httpServer,
   {
-    cors: { origin: ORIGIN, methods: ["GET", "POST"] },
+    cors: { origin: ORIGINS, methods: ["GET", "POST"] },
   },
 );
 
@@ -49,7 +64,7 @@ resumeRoundTimers(io).catch((error) =>
 startSweeper(io);
 
 httpServer.listen(PORT, () => {
-  console.log(`[realtime] Socket.IO listening on :${PORT} (origin: ${ORIGIN})`);
+  console.log(`[realtime] Socket.IO listening on :${PORT} (origins: ${ORIGINS.join(", ")})`);
   console.log(
     `[realtime] sweep=${REALTIME_CONFIG.sweepIntervalMs}ms hostGrace=${REALTIME_CONFIG.hostGraceMs}ms playerTtl=${REALTIME_CONFIG.playerTtlMs}ms roomTtl=${REALTIME_CONFIG.roomTtlMs}ms`,
   );

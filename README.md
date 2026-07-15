@@ -16,8 +16,14 @@ os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
 
 ## Requisitos
 
-- Node.js 18.18+ (recomendado: 20 ou 24)
+- **Node.js 26** — a versão está fixada em `.nvmrc` (e declarada em `engines`).
+  Com nvm: `nvm use` na raiz do projeto.
 - npm
+
+> ⚠️ **Trocou de versão do Node? Rode `npm rebuild better-sqlite3`.**
+> O `better-sqlite3` é um módulo **nativo**: o binário é compilado contra o ABI de uma
+> versão específica do Node. Rodar com outra versão gera um erro de runtime confuso
+> (`NODE_MODULE_VERSION 137 ... requires 147`) — não é bug do código, é só recompilar.
 
 ## Setup
 
@@ -50,22 +56,69 @@ npm run dev          # sobe Next (:3000) + servidor Socket.IO (:3001) juntos
 | `npm run db:migrate`   | Cria/aplica migrations em desenvolvimento |
 | `npm run db:studio`    | Abre o Prisma Studio                      |
 
-## Produção — o que saber antes de subir
+## Deploy
 
-- **Dois processos**: o app Next e o servidor Socket.IO (`server.ts`) são independentes.
-  `npm start` sobe os dois; num deploy real cada um é um serviço (o realtime precisa de
-  conexão persistente, então não vai em serverless).
-- **Variáveis obrigatórias**: `DATABASE_URL`, `CLIENT_ORIGIN` (origem permitida no CORS),
-  `NEXT_PUBLIC_SOCKET_URL`, `NEXT_PUBLIC_SITE_URL`.
-- **Banco**: SQLite serve bem um nó. O schema é portável — trocar para PostgreSQL é mudar
-  o `provider` (veja o cabeçalho de `prisma/schema.prisma`). Rode `db:migrate` + `db:seed`.
-- **Limitações conhecidas**:
-  - O rate limit vive em memória, por nó → um deploy multi-nó precisa de um store
-    compartilhado (Redis), e o Socket.IO precisaria de um adapter.
-  - `start:socket` roda TypeScript via `tsx`. Funciona; compilar para JS é o passo natural
-    se o boot precisar ser mais enxuto.
-  - `/design` é o showcase interno do design system — continua acessível pela URL, mas
-    deixou de ser anunciado na navegação do jogador.
+> ⚠️ **A Vercel sozinha NÃO roda este projeto.** O jogo são dois processos: as páginas
+> (Next) e o **servidor de tempo real** (`server.ts`). WebSocket precisa de um processo que
+> fica de pé; serverless acorda, responde e morre. A Vercel serve muito bem o primeiro e
+> não consegue rodar o segundo. Sem o segundo, criar sala falha com
+> *"Não foi possível conectar ao servidor"*.
+
+Arquitetura em produção:
+
+```
+   navegador ──HTTP──►  Vercel (Next)          páginas, sem banco
+        │
+        └─────WS───►  Railway/Fly/Render      server.ts + volume com o SQLite
+                       (processo persistente)
+```
+
+### 1. Servidor de tempo real (Railway, Fly ou Render — precisa de volume)
+
+Use o `Dockerfile` da raiz (só o realtime; não builda o Next).
+
+- **Volume**: monte em `/data`. É onde o banco vive — sem volume, os dados somem a cada deploy.
+- **Porta**: `3001` (exposta na imagem).
+- **Variáveis**:
+  | Variável | Valor |
+  | --- | --- |
+  | `DATABASE_URL` | `file:/data/prod.db` (já é o default da imagem) |
+  | `CLIENT_ORIGIN` | origens do navegador, **separadas por vírgula**: `https://seu-app.vercel.app,https://seudominio.com.br` |
+
+  `PORT` é injetada pela plataforma e o servidor a respeita automaticamente — não precisa setar.
+
+No primeiro boot a imagem roda `migrate deploy` + `db seed` sozinha (ambos idempotentes).
+Confirme com `https://SEU-SOCKET/health` → `{"ok":true}`.
+
+### 2. App Next (Vercel)
+
+Variáveis no projeto da Vercel:
+
+| Variável | Valor |
+| --- | --- |
+| `NEXT_PUBLIC_SOCKET_URL` | a URL pública do servidor de tempo real (`https://...`) |
+| `NEXT_PUBLIC_SITE_URL` | a URL da Vercel |
+
+> `NEXT_PUBLIC_*` é lido **no build**. Depois de mudar, faça **redeploy** — não basta salvar.
+> Se `NEXT_PUBLIC_SOCKET_URL` faltar, o navegador tenta `http://localhost:3001` (a máquina do
+> jogador) e falha — foi exatamente esse o sintoma.
+
+`DATABASE_URL` **não** é necessário na Vercel: o app Next nunca toca o banco.
+
+### 3. Checklist quando "não conecta"
+
+1. `https://SEU-SOCKET/health` responde `{"ok":true}`?
+2. `NEXT_PUBLIC_SOCKET_URL` está setado **e** houve redeploy depois disso?
+3. `CLIENT_ORIGIN` no socket é **exatamente** a origem da Vercel (protocolo, sem barra final)?
+4. Site em `https` e socket em `http`? O navegador bloqueia (mixed content) — o socket
+   precisa de `https`.
+
+### Limites deste setup
+
+- **Uma instância só.** O SQLite no volume e o rate limit em memória assumem um nó. Para
+  escalar horizontalmente: migrar para PostgreSQL (o schema já é portável — veja o cabeçalho
+  de `prisma/schema.prisma`) e adicionar um adapter do Socket.IO (Redis).
+- Sem backup automático do volume — configure snapshots no host se os dados importarem.
 
 ## Arquitetura de pastas
 
