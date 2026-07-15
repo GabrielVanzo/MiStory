@@ -35,10 +35,12 @@ model Enigma {
   id          String  @id @default(cuid())
   slug        String  @unique
   title       String
-  /// Public scene shown to every player.
+  /// Public scene shown to every player ("introdução").
   teaser      String
-  /// Hidden full explanation, revealed only when solved.
+  /// SECRET — what actually happened ("resposta"). Host-only, never broadcast.
   solution    String
+  /// SECRET — the reasoning behind it ("explicação"). Host-only, never broadcast.
+  explanation String
   /// Difficulty — one of: EASY | MEDIUM | HARD (see types/game.ts).
   difficulty  String  @default("MEDIUM")
   language    String  @default("pt-BR")
@@ -108,6 +110,7 @@ model Player {
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   questions      Question[]
+  guesses        Guess[]
   answers        Answer[]   @relation("AnswerAuthor")
   masteredRounds Round[]    @relation("RoundMaster")
   solvedRounds   Round[]    @relation("RoundSolver")
@@ -144,9 +147,13 @@ model Round {
   solvedBy Player? @relation("RoundSolver", fields: [solvedById], references: [id], onDelete: SetNull)
 
   questions Question[]
+  guesses   Guess[]
   scores    Score[]
 
   startedAt DateTime?
+  /// Server-authoritative deadline. The server enforces expiry; clients only
+  /// render a countdown towards this instant.
+  expiresAt DateTime?
   endedAt   DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -160,13 +167,16 @@ model Round {
 // Question ("Pergunta") — a yes/no question asked by a player during a round.
 // ---------------------------------------------------------------------------
 model Question {
-  id       String @id @default(cuid())
-  roundId  String
-  playerId String
-  content  String
+  id         String  @id @default(cuid())
+  roundId    String
+  /// Nullable so the round log survives if the asker leaves or is reaped.
+  playerId   String?
+  /// Nickname snapshot taken when asked — keeps the log readable afterwards.
+  authorName String
+  content    String
 
-  round  Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  round  Round   @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
 
   answer Answer?
 
@@ -177,6 +187,32 @@ model Question {
 }
 
 // ---------------------------------------------------------------------------
+// Guess ("Chute") — a player's single shot at the solution in a round. The
+// host accepts (round is solved) or rejects (the shot is spent).
+// ---------------------------------------------------------------------------
+model Guess {
+  id         String  @id @default(cuid())
+  roundId    String
+  /// Nullable so the log survives if the guesser leaves (same as Question).
+  playerId   String?
+  /// Nickname snapshot taken when guessed.
+  authorName String
+  content    String
+  /// One of: PENDING | ACCEPTED | REJECTED (see types/game.ts).
+  status     String  @default("PENDING")
+
+  round  Round   @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  /// THE single-shot rule: one guess per player per round, enforced by the DB.
+  @@unique([roundId, playerId])
+  @@index([roundId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
 // Answer ("Resposta") — the master's reply to a question (1:1 with Question).
 // ---------------------------------------------------------------------------
 model Answer {
@@ -184,7 +220,7 @@ model Answer {
   questionId String  @unique
   /// The master who answered (nullable to preserve history).
   authorId   String?
-  /// Answer value — one of: YES | NO | IRRELEVANT | UNKNOWN (see types/game.ts).
+  /// Answer value — one of: YES | NO | IRRELEVANT (see types/game.ts).
   value      String
 
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
@@ -200,19 +236,22 @@ model Answer {
 // aggregated at query time, which keeps an auditable history and scales well.
 // ---------------------------------------------------------------------------
 model Score {
-  id       String  @id @default(cuid())
-  roomId   String
-  playerId String
+  id         String  @id @default(cuid())
+  roomId     String
+  /// Nullable so the ledger (and the room's history) survives a player leaving.
+  playerId   String?
+  /// Nickname snapshot, so past standings stay readable after they leave.
+  playerName String
   /// Optional link to the round that awarded the points (null = room-level).
-  roundId  String?
+  roundId    String?
 
   points Int
-  /// Why points were awarded — e.g. SOLVED_ENIGMA | GOOD_QUESTION | HOST_BONUS.
+  /// Why points were awarded — one of: SOLVED_ENIGMA | WRONG_GUESS (types/game.ts).
   reason String?
 
-  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  round  Round? @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  room   Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  player Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  round  Round?  @relation(fields: [roundId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 

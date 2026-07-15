@@ -8,7 +8,9 @@ import type {
   ServerToClientEvents,
   SocketData,
 } from "./lib/realtime/events";
-import { registerRealtimeHandlers } from "./server/realtime";
+import { registerRealtimeHandlers, resumeRoundTimers, startSweeper } from "./server/realtime";
+import { REALTIME_CONFIG } from "./server/realtime/config";
+import { markAllPlayersDisconnected } from "./server/realtime/rooms";
 
 const PORT = Number(process.env.SOCKET_PORT ?? 3001);
 const ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
@@ -32,8 +34,25 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEve
 
 registerRealtimeHandlers(io);
 
+// Presence from a previous process is stale — no sockets exist yet.
+markAllPlayersDisconnected()
+  .then((count) => {
+    if (count > 0) console.log(`[realtime] reset presence for ${count} player(s)`);
+  })
+  .catch((error) => console.error("[realtime] presence reset failed:", error));
+
+// Round deadlines must survive a restart — re-arm them (and close overdue ones).
+resumeRoundTimers(io).catch((error) =>
+  console.error("[realtime] round timer resume failed:", error),
+);
+
+startSweeper(io);
+
 httpServer.listen(PORT, () => {
   console.log(`[realtime] Socket.IO listening on :${PORT} (origin: ${ORIGIN})`);
+  console.log(
+    `[realtime] sweep=${REALTIME_CONFIG.sweepIntervalMs}ms hostGrace=${REALTIME_CONFIG.hostGraceMs}ms playerTtl=${REALTIME_CONFIG.playerTtlMs}ms roomTtl=${REALTIME_CONFIG.roomTtlMs}ms`,
+  );
 });
 
 function shutdown(): void {

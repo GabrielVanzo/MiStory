@@ -17,6 +17,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EnigmaCard, HostSecretPanel, RoundRevealPanel } from "@/features/room/enigma-card";
+import { GuessButton, GuessPanel } from "@/features/room/guess-panel";
+import { HostControls } from "@/features/room/host-controls";
+import { Leaderboard, RoomHistory } from "@/features/room/leaderboard";
+import { AskBar, QuestionFeed } from "@/features/room/question-feed";
 import { useRoom } from "@/features/room/room-provider";
 
 function fallbackStyle(color: string | null) {
@@ -110,7 +116,7 @@ function PlayerRow({ player, isMe }: { player: PlayerDTO; isMe: boolean }) {
 
 export function RoomView() {
   const router = useRouter();
-  const { phase, connection, room, me, isHost, leave } = useRoom();
+  const { phase, connection, room, me, isHost, secret, busy, error, leave, startRound } = useRoom();
   const [leaving, setLeaving] = useState(false);
 
   if (phase === "loading") {
@@ -216,50 +222,94 @@ export function RoomView() {
       ) : null}
 
       <div className="mx-auto grid w-full max-w-7xl flex-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[1fr_320px]">
-        {/* Lobby / waiting area */}
+        {/* Round in progress, or the waiting lobby */}
         <div className="flex min-h-0 flex-col gap-4">
-          <Card className="flex flex-1 flex-col items-center justify-center gap-5 py-16 text-center">
-            <CardContent className="flex flex-col items-center gap-5">
-              <div className="bg-primary/15 text-primary ring-primary/25 flex size-16 items-center justify-center rounded-2xl ring-1">
-                <UsersIcon className="size-7" />
+          {room.round ? (
+            <>
+              <EnigmaCard round={room.round} />
+              {/* Rendered only for the host — `secret` is null for everyone else. */}
+              {secret ? <HostSecretPanel secret={secret} /> : null}
+              {/* Public once the server ends the round. */}
+              <RoundRevealPanel round={room.round} />
+              {isHost ? <HostControls /> : null}
+              <GuessPanel round={room.round} />
+              <QuestionFeed round={room.round} />
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                <div className="flex-1">
+                  <AskBar round={room.round} />
+                </div>
+                <GuessButton round={room.round} />
               </div>
-              <div className="space-y-1">
-                <h2 className="text-xl font-semibold">Sala de espera</h2>
-                <p className="text-muted-foreground max-w-sm text-balance">
-                  {connectedCount} de {room.maxPlayers} detetives conectados. A partida ainda não
-                  começou.
-                </p>
-              </div>
-              {isHost ? (
-                <Button disabled>
-                  <SparklesIcon /> Iniciar partida (em breve)
-                </Button>
-              ) : (
-                <p className="text-muted-foreground text-sm">
-                  Aguardando o anfitrião iniciar a partida.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+              {error ? <p className="text-destructive text-sm">{error}</p> : null}
+            </>
+          ) : (
+            <Card className="flex flex-1 flex-col items-center justify-center gap-5 py-16 text-center">
+              <CardContent className="flex flex-col items-center gap-5">
+                <div className="bg-primary/15 text-primary ring-primary/25 flex size-16 items-center justify-center rounded-2xl ring-1">
+                  <UsersIcon className="size-7" />
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-xl font-semibold">Sala de espera</h2>
+                  <p className="text-muted-foreground max-w-sm text-balance">
+                    {connectedCount} de {room.maxPlayers} detetives conectados.
+                  </p>
+                </div>
+                {isHost ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Button onClick={startRound} disabled={busy}>
+                      {busy ? <Spinner size="sm" /> : <SparklesIcon />}
+                      Sortear enigma e iniciar
+                    </Button>
+                    <p className="text-muted-foreground text-xs">
+                      Você será o mestre e verá a resposta.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">
+                    Aguardando o anfitrião iniciar a partida.
+                  </p>
+                )}
+                {error ? <p className="text-destructive text-sm">{error}</p> : null}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
-        {/* Live players */}
+        {/* Players / standings / history */}
         <aside className="flex flex-col">
           <Card className="flex-1">
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between text-sm">
-                <span>Jogadores</span>
-                <Badge variant="secondary">
-                  {room.players.length}/{room.maxPlayers}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-1">
-                {room.players.map((player) => (
-                  <PlayerRow key={player.id} player={player} isMe={player.id === me?.id} />
-                ))}
-              </ul>
+            <CardContent className="p-0">
+              <Tabs defaultValue="jogadores" className="gap-0">
+                <div className="px-3 pt-3">
+                  <TabsList className="w-full">
+                    <TabsTrigger value="jogadores">Jogadores</TabsTrigger>
+                    <TabsTrigger value="ranking">Ranking</TabsTrigger>
+                    <TabsTrigger value="historico">Histórico</TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <TabsContent value="jogadores" className="mt-0 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-muted-foreground text-xs">Na sala</span>
+                    <Badge variant="secondary">
+                      {room.players.length}/{room.maxPlayers}
+                    </Badge>
+                  </div>
+                  <ul className="space-y-1">
+                    {room.players.map((player) => (
+                      <PlayerRow key={player.id} player={player} isMe={player.id === me?.id} />
+                    ))}
+                  </ul>
+                </TabsContent>
+
+                <TabsContent value="ranking" className="mt-0 p-3">
+                  <Leaderboard entries={room.leaderboard} />
+                </TabsContent>
+
+                <TabsContent value="historico" className="mt-0 p-3">
+                  <RoomHistory history={room.history} />
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
         </aside>

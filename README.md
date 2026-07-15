@@ -3,7 +3,7 @@
 Jogo de enigmas multiplayer em tempo real. Um mestre conhece a história completa;
 os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
 
-> **Status:** MVP em construção — Etapas 1–5 concluídas (setup, design system, layout, banco de dados, tempo real).
+> **Status:** MVP em construção — Etapas 1–11 concluídas — jogo jogável de ponta a ponta (setup, design system, layout, banco, tempo real, salas, enigmas, fluxo da partida, perguntas, chutes, pontuação).
 
 ## Stack
 
@@ -25,6 +25,7 @@ os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.
 npm install          # instala deps e roda `prisma generate` (postinstall)
 cp .env.example .env # variáveis de ambiente locais
 npm run db:migrate   # aplica as migrations no banco SQLite (prisma/dev.db)
+npm run db:seed      # carrega os 30 enigmas de `data/enigmas.ts` no banco
 npm run dev          # sobe Next (:3000) + servidor Socket.IO (:3001) juntos
 ```
 
@@ -45,6 +46,7 @@ npm run dev          # sobe Next (:3000) + servidor Socket.IO (:3001) juntos
 | `npm run typecheck`    | Checagem de tipos (`tsc --noEmit`)        |
 | `npm run db:generate`  | Gera o Prisma Client                      |
 | `npm run db:push`      | Sincroniza o schema com o banco           |
+| `npm run db:seed`      | Popula o catálogo de enigmas              |
 | `npm run db:migrate`   | Cria/aplica migrations em desenvolvimento |
 | `npm run db:studio`    | Abre o Prisma Studio                      |
 
@@ -53,6 +55,7 @@ npm run dev          # sobe Next (:3000) + servidor Socket.IO (:3001) juntos
 ```
 app/         Rotas e layouts (App Router)
 components/  Componentes de UI reutilizáveis (ui/ = shadcn)
+data/        Conteúdo estático (catálogo de enigmas)
 features/    Módulos por domínio/funcionalidade
 hooks/       React hooks compartilhados
 lib/         Integrações e utilitários de baixo nível (prisma, cn)

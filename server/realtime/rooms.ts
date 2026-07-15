@@ -8,15 +8,11 @@ import type {
   RoomJoinedPayload,
   RoomState,
 } from "../../lib/realtime/events";
-import { RealtimeError, type RealtimeErrorCode } from "../../lib/realtime/events";
-
-/** Domain error carrying a stable code the client can localize. */
-export class RoomError extends Error {
-  constructor(public code: RealtimeErrorCode) {
-    super(code);
-    this.name = "RoomError";
-  }
-}
+import { RealtimeError } from "../../lib/realtime/events";
+import { REALTIME_CONFIG } from "./config";
+import { RoomError } from "./errors";
+import { getPublicRound } from "./rounds";
+import { getHistory, getLeaderboard } from "./scores";
 
 const NICKNAME_MAX = 20;
 const NAME_MAX = 40;
@@ -37,6 +33,7 @@ const PLAYER_COLORS = [
 
 // Unambiguous alphabet (no O/0, I/1) for readable join codes.
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CODE_SEGMENT = 4;
 
 function randomCodeSegment(length: number): string {
   let out = "";
@@ -48,11 +45,33 @@ function randomCodeSegment(length: number): string {
 
 async function generateUniqueCode(): Promise<string> {
   for (let attempt = 0; attempt < 10; attempt++) {
-    const code = `${randomCodeSegment(4)}-${randomCodeSegment(4)}`;
+    const code = `${randomCodeSegment(CODE_SEGMENT)}-${randomCodeSegment(CODE_SEGMENT)}`;
     const existing = await prisma.room.findUnique({ where: { code }, select: { id: true } });
     if (!existing) return code;
   }
   throw new RoomError(RealtimeError.INTERNAL);
+}
+
+/**
+ * Accepts what users actually type — "lago7x2k", "LAGO 7X2K", "lago-7x2k" —
+ * and returns the canonical "LAGO-7X2K". Returns null when it cannot be a code.
+ */
+export function normalizeCode(raw: string): string | null {
+  const cleaned = String(raw ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  if (cleaned.length !== CODE_SEGMENT * 2) return null;
+  return `${cleaned.slice(0, CODE_SEGMENT)}-${cleaned.slice(CODE_SEGMENT)}`;
+}
+
+/** Prisma unique-constraint violation, detected without importing error classes. */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
 }
 
 function cleanText(value: unknown, max: number): string {
@@ -79,6 +98,12 @@ function toPlayerDTO(player: PlayerRow): PlayerDTO {
   };
 }
 
+/**
+ * The authoritative snapshot broadcast to every player in a room.
+ *
+ * SECURITY: everything here is public. The round is fetched through
+ * `getPublicRound`, which never loads the enigma's answer/explanation.
+ */
 export async function buildRoomState(roomId: string): Promise<RoomState | null> {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
@@ -87,6 +112,12 @@ export async function buildRoomState(roomId: string): Promise<RoomState | null> 
   if (!room) return null;
 
   const host = room.players.find((p) => p.isHost);
+  const [round, leaderboard, history] = await Promise.all([
+    getPublicRound(roomId),
+    getLeaderboard(roomId),
+    getHistory(roomId),
+  ]);
+
   return {
     id: room.id,
     code: room.code,
@@ -96,6 +127,10 @@ export async function buildRoomState(roomId: string): Promise<RoomState | null> 
     maxPlayers: room.maxPlayers,
     hostId: host?.id ?? null,
     players: room.players.map(toPlayerDTO),
+    round,
+    leaderboard,
+    history,
+    serverTime: new Date().toISOString(),
   };
 }
 
@@ -132,55 +167,76 @@ export async function createRoom(input: CreateRoomInput): Promise<RoomJoinedPayl
     include: { players: true },
   });
 
-  const state = toState(room);
+  const state = await buildRoomState(room.id);
+  if (!state) throw new RoomError(RealtimeError.INTERNAL);
   return { room: state, playerId: room.players[0].id, sessionToken };
 }
 
 export async function joinOrResume(input: JoinRoomInput): Promise<RoomJoinedPayload> {
-  const code = cleanText(input.code, 12).toUpperCase();
-  const nickname = cleanText(input.nickname, NICKNAME_MAX);
-  if (!code) throw new RoomError(RealtimeError.INVALID_INPUT);
-
-  const room = await prisma.room.findUnique({
-    where: { code },
-    include: { players: { orderBy: { joinedAt: "asc" } } },
-  });
-  if (!room) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
+  if (!cleanText(input.code, 32)) throw new RoomError(RealtimeError.INVALID_INPUT);
+  const code = normalizeCode(input.code);
+  if (!code) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
 
   // Reconnection / revisit: reclaim an existing seat by its secret token.
   if (input.sessionToken) {
-    const existing = room.players.find((p) => p.sessionToken === input.sessionToken);
+    const existing = await prisma.player.findFirst({
+      where: { sessionToken: input.sessionToken, room: { code } },
+      select: { id: true, roomId: true },
+    });
     if (existing) {
-      const updated = await prisma.player.update({
+      await prisma.player.update({
         where: { id: existing.id },
         data: { isConnected: true, lastSeenAt: new Date() },
       });
-      const state = await buildRoomState(room.id);
-      return { room: state!, playerId: updated.id, sessionToken: input.sessionToken };
+      const state = await buildRoomState(existing.roomId);
+      if (!state) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
+      return { room: state, playerId: existing.id, sessionToken: input.sessionToken };
     }
   }
 
-  // Fresh join.
+  const nickname = cleanText(input.nickname, NICKNAME_MAX);
   if (!nickname) throw new RoomError(RealtimeError.INVALID_INPUT);
-  if (room.players.length >= room.maxPlayers) throw new RoomError(RealtimeError.ROOM_FULL);
-  if (room.players.some((p) => p.nickname.toLowerCase() === nickname.toLowerCase())) {
-    throw new RoomError(RealtimeError.NICKNAME_TAKEN);
-  }
-
   const sessionToken = randomUUID();
-  const player = await prisma.player.create({
-    data: {
-      roomId: room.id,
-      nickname,
-      isHost: false,
-      isConnected: true,
-      sessionToken,
-      color: PLAYER_COLORS[room.players.length % PLAYER_COLORS.length],
-    },
-  });
 
-  const state = await buildRoomState(room.id);
-  return { room: state!, playerId: player.id, sessionToken };
+  // Fresh join runs in a transaction so two concurrent joins cannot exceed
+  // maxPlayers or land the same nickname.
+  const created = await prisma
+    .$transaction(async (tx) => {
+      const room = await tx.room.findUnique({
+        where: { code },
+        select: {
+          id: true,
+          maxPlayers: true,
+          players: { select: { id: true, nickname: true } },
+        },
+      });
+      if (!room) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
+      if (room.players.length >= room.maxPlayers) throw new RoomError(RealtimeError.ROOM_FULL);
+      if (room.players.some((p) => p.nickname.toLowerCase() === nickname.toLowerCase())) {
+        throw new RoomError(RealtimeError.NICKNAME_TAKEN);
+      }
+
+      return tx.player.create({
+        data: {
+          roomId: room.id,
+          nickname,
+          isHost: false,
+          isConnected: true,
+          sessionToken,
+          color: PLAYER_COLORS[room.players.length % PLAYER_COLORS.length],
+        },
+        select: { id: true, roomId: true },
+      });
+    })
+    .catch((error: unknown) => {
+      if (error instanceof RoomError) throw error;
+      if (isUniqueViolation(error)) throw new RoomError(RealtimeError.NICKNAME_TAKEN);
+      throw error;
+    });
+
+  const state = await buildRoomState(created.roomId);
+  if (!state) throw new RoomError(RealtimeError.ROOM_NOT_FOUND);
+  return { room: state, playerId: created.id, sessionToken };
 }
 
 /**
@@ -200,13 +256,14 @@ export async function leaveRoom(playerId: string): Promise<RoomState | null> {
   });
 
   if (remaining.length === 0) {
-    await prisma.room.delete({ where: { id: roomId } });
+    await prisma.room.delete({ where: { id: roomId } }).catch(() => null);
     return null;
   }
 
   // Transfer host to the longest-present remaining player if the host left.
   if (player.isHost) {
-    await prisma.player.update({ where: { id: remaining[0].id }, data: { isHost: true } });
+    const next = remaining.find((p) => p.isConnected) ?? remaining[0];
+    await prisma.player.update({ where: { id: next.id }, data: { isHost: true } });
   }
 
   return buildRoomState(roomId);
@@ -224,27 +281,93 @@ export async function setConnected(playerId: string, isConnected: boolean): Prom
   return player?.roomId ?? null;
 }
 
-type RoomWithPlayers = {
-  id: string;
-  code: string;
-  name: string;
-  status: string;
-  isPrivate: boolean;
-  maxPlayers: number;
-  players: PlayerRow[];
-};
+/**
+ * No sockets exist right after boot, so any `isConnected` left over from a
+ * previous process is a lie. Reset it and give everyone a fresh grace window.
+ */
+export async function markAllPlayersDisconnected(): Promise<number> {
+  const res = await prisma.player.updateMany({
+    data: { isConnected: false, lastSeenAt: new Date() },
+  });
+  return res.count;
+}
 
-function toState(room: RoomWithPlayers): RoomState {
-  const ordered = [...room.players].sort((a, b) => a.joinedAt.getTime() - b.joinedAt.getTime());
-  const host = ordered.find((p) => p.isHost);
-  return {
-    id: room.id,
-    code: room.code,
-    name: room.name,
-    status: room.status,
-    isPrivate: room.isPrivate,
-    maxPlayers: room.maxPlayers,
-    hostId: host?.id ?? null,
-    players: ordered.map(toPlayerDTO),
-  };
+export interface SweepResult {
+  deletedRoomIds: string[];
+  updatedRoomIds: string[];
+}
+
+/**
+ * Periodic reconciliation — the safety net behind the immediate socket
+ * handlers. Handles the cases that no `room:leave` ever covers:
+ *   1. rooms whose players all vanished  -> delete the room
+ *   2. seats held by long-gone players   -> free the seat
+ *   3. a host who left and never returned -> transfer host
+ */
+export async function sweepRooms(now: number = Date.now()): Promise<SweepResult> {
+  const deletedRoomIds: string[] = [];
+  const updatedRoomIds: string[] = [];
+
+  const rooms = await prisma.room.findMany({
+    include: { players: { orderBy: { joinedAt: "asc" } } },
+  });
+
+  const activityOf = (p: { lastSeenAt: Date | null; joinedAt: Date }) =>
+    (p.lastSeenAt ?? p.joinedAt).getTime();
+
+  for (const room of rooms) {
+    const connected = room.players.filter((p) => p.isConnected);
+
+    // 1. Nobody is connected — delete once the grace window has passed.
+    if (connected.length === 0) {
+      const lastActivity = room.players.length
+        ? Math.max(...room.players.map(activityOf))
+        : room.createdAt.getTime();
+      if (now - lastActivity > REALTIME_CONFIG.roomTtlMs) {
+        await prisma.room.delete({ where: { id: room.id } }).catch(() => null);
+        deletedRoomIds.push(room.id);
+      }
+      continue;
+    }
+
+    let changed = false;
+
+    // 2. Free seats held by players who have been offline too long.
+    //    ONLY in the lobby: freeing a seat means DELETING the player, which
+    //    would also destroy their identity, score and place in the standings.
+    //    Mid-match a dropped connection must never cost someone their game —
+    //    they keep their seat and can resume. Seats only matter before kickoff.
+    const inLobby = room.status === "LOBBY";
+    const ghosts = inLobby
+      ? room.players.filter(
+          (p) => !p.isConnected && now - activityOf(p) > REALTIME_CONFIG.playerTtlMs,
+        )
+      : [];
+    if (ghosts.length > 0) {
+      await prisma.player.deleteMany({ where: { id: { in: ghosts.map((g) => g.id) } } });
+      changed = true;
+    }
+
+    // 3. Transfer host if it is missing or has been offline past the grace.
+    const remaining = room.players.filter((p) => !ghosts.some((g) => g.id === p.id));
+    const host = remaining.find((p) => p.isHost);
+    const hostIsStale = host
+      ? !host.isConnected && now - activityOf(host) > REALTIME_CONFIG.hostGraceMs
+      : true;
+
+    if (hostIsStale) {
+      const candidate = remaining.find((p) => p.isConnected);
+      if (candidate && candidate.id !== host?.id) {
+        if (host) {
+          await prisma.player.update({ where: { id: host.id }, data: { isHost: false } });
+        }
+        await prisma.player.update({ where: { id: candidate.id }, data: { isHost: true } });
+        changed = true;
+      }
+    }
+
+    if (changed) updatedRoomIds.push(room.id);
+  }
+
+  return { deletedRoomIds, updatedRoomIds };
 }
