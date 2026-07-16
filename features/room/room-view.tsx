@@ -31,7 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EnigmaCard, MasterSecretPanel, RoundRevealPanel } from "@/features/room/enigma-card";
-import { GuessButton, GuessPanel } from "@/features/room/guess-panel";
+import { GuessButton, PendingGuessModal } from "@/features/room/guess-panel";
 import { RoundControls } from "@/features/room/host-controls";
 import { PlayerAvatar } from "@/features/room/player-avatar";
 import { Leaderboard, RoomHistory } from "@/features/room/leaderboard";
@@ -393,9 +393,11 @@ export function RoomView() {
               {/* Contextual panels sit above the feed; the feed is the scroller. */}
               {secret ? <MasterSecretPanel secret={secret} /> : null}
               <RoundRevealPanel round={room.round} />
-              <GuessPanel round={room.round} />
 
               <QuestionFeed round={room.round} filter={isMaster ? "all" : feedFilter} />
+
+              {/* Master-only judging pop-up — self-gates on the secret payload. */}
+              <PendingGuessModal />
 
               {/* Fixed action bar: detective composer / guess, or the master's controls. */}
               <div className="bg-background/80 supports-[backdrop-filter]:bg-background/60 shrink-0 pb-[env(safe-area-inset-bottom)] backdrop-blur">

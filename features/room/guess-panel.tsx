@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { BanIcon, LightbulbIcon, TrophyIcon } from "lucide-react";
+import { BanIcon, CheckIcon, LightbulbIcon, XIcon } from "lucide-react";
 
-import type { GuessDTO, PublicRound } from "@/lib/realtime/events";
-import { Badge } from "@/components/ui/badge";
+import type { PublicRound } from "@/lib/realtime/events";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -20,7 +18,6 @@ import {
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { PlayerAvatar } from "@/features/room/player-avatar";
 import { useRoom } from "@/features/room/room-provider";
 
 const GUESS_MAX = 300;
@@ -126,64 +123,78 @@ export function GuessButton({ round }: { round: PublicRound }) {
   );
 }
 
-function GuessRow({
-  guess,
-  color,
-  isWinner,
-}: {
-  guess: GuessDTO;
-  color: string | null;
-  isWinner: boolean;
-}) {
-  return (
-    <li className="flex items-center gap-3 rounded-lg px-2 py-1.5">
-      <PlayerAvatar name={guess.authorName} color={color} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium">{guess.authorName}</span>
-      {isWinner ? (
-        <Badge variant="success" className="gap-1">
-          <TrophyIcon /> Venceu
-        </Badge>
-      ) : guess.status === "REJECTED" ? (
-        <Badge variant="destructive">Eliminado</Badge>
-      ) : (
-        <Badge variant="warning">Chutou</Badge>
-      )}
-    </li>
-  );
-}
-
 /**
- * Public scoreboard of guesses — WHO guessed and how it went, never the text.
- * The text lives only in the master's private panel and, for the winner, in the
- * reveal. Rendered only once someone has taken a shot.
+ * MASTER ONLY. Pops up the moment a secret guess arrives so the accept/reject
+ * buttons can never be scrolled off-screen. It stays up (no dismiss) until the
+ * master decides; the server clears the pending guess and the dialog closes
+ * itself. The solution is shown right here so judging needs nothing else.
  */
-export function GuessPanel({ round }: { round: PublicRound }) {
-  const { room } = useRoom();
-  if (round.guesses.length === 0) return null;
+export function PendingGuessModal() {
+  const { secret, resolveGuess } = useRoom();
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  const colorOf = (playerId: string | null) =>
-    room?.players.find((p) => p.id === playerId)?.color ?? null;
+  const guesses = secret?.pendingGuesses ?? [];
+  const open = guesses.length > 0;
+
+  async function judge(id: string, accept: boolean) {
+    setBusyKey(`${id}:${accept ? "a" : "r"}`);
+    await resolveGuess(id, accept);
+    setBusyKey(null);
+  }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <LightbulbIcon className="text-warning size-4" /> Chutes
-          <Badge variant="secondary">{round.guesses.length}</Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-2">
-        <ul className="space-y-0.5">
-          {round.guesses.map((g) => (
-            <GuessRow
-              key={g.id}
-              guess={g}
-              color={colorOf(g.playerId)}
-              isWinner={g.status === "ACCEPTED"}
-            />
+    <Dialog open={open}>
+      <DialogContent
+        showCloseButton={false}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <LightbulbIcon className="text-warning size-4" />
+            {guesses.length > 1 ? "Chutes para julgar" : "Chute para julgar"}
+          </DialogTitle>
+          <DialogDescription>
+            Compare com a solução. Aceitar encerra a rodada (o detetive vence); recusar elimina o
+            detetive desta história.
+          </DialogDescription>
+        </DialogHeader>
+
+        {secret ? (
+          <div className="bg-muted/40 rounded-lg p-3">
+            <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+              Resposta
+            </p>
+            <p className="text-sm text-pretty">{secret.answer}</p>
+          </div>
+        ) : null}
+
+        <ul className="space-y-3">
+          {guesses.map((g) => (
+            <li key={g.id} className="bg-background/60 ring-border space-y-2 rounded-lg p-3 ring-1">
+              <p className="text-muted-foreground text-xs font-medium">
+                Chute de <span className="text-foreground">{g.authorName}</span>
+              </p>
+              <p className="text-sm text-pretty">{g.content}</p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => judge(g.id, true)} disabled={busyKey !== null}>
+                  {busyKey === `${g.id}:a` ? <Spinner size="xs" /> : <CheckIcon />}
+                  Aceitar (vence)
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => judge(g.id, false)}
+                  disabled={busyKey !== null}
+                >
+                  {busyKey === `${g.id}:r` ? <Spinner size="xs" /> : <XIcon />}
+                  Recusar (elimina)
+                </Button>
+              </div>
+            </li>
           ))}
         </ul>
-      </CardContent>
-    </Card>
+      </DialogContent>
+    </Dialog>
   );
 }

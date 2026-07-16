@@ -2,16 +2,13 @@
 
 import { useState } from "react";
 import {
-  CheckIcon,
   EyeIcon,
   EyeOffIcon,
   HourglassIcon,
   LockIcon,
   PauseIcon,
   TimerIcon,
-  TrophyIcon,
   UnlockIcon,
-  XIcon,
 } from "lucide-react";
 
 import type { PublicRound, RoundSecret } from "@/lib/realtime/events";
@@ -22,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Spinner } from "@/components/ui/spinner";
 import {
   DIFFICULTY_LABEL,
   DIFFICULTY_TONE,
@@ -105,58 +101,13 @@ export function EnigmaCard({ round }: { round: PublicRound }) {
   );
 }
 
-/** The master judges a pending guess — the only place a guess text is shown. */
-function PendingGuessRow({
-  id,
-  authorName,
-  content,
-}: {
-  id: string;
-  authorName: string;
-  content: string;
-}) {
-  const { resolveGuess } = useRoom();
-  const [pending, setPending] = useState<"accept" | "reject" | null>(null);
-
-  async function judge(accept: boolean) {
-    setPending(accept ? "accept" : "reject");
-    await resolveGuess(id, accept);
-    setPending(null);
-  }
-
-  return (
-    <li className="bg-background/60 ring-border space-y-2 rounded-lg p-3 ring-1">
-      <p className="text-muted-foreground text-xs font-medium">
-        Chute de <span className="text-foreground">{authorName}</span>
-      </p>
-      <p className="text-sm text-pretty">{content}</p>
-      <div className="flex gap-2">
-        <Button size="sm" onClick={() => judge(true)} disabled={pending !== null}>
-          {pending === "accept" ? <Spinner size="xs" /> : <CheckIcon />}
-          Aceitar (vence)
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => judge(false)}
-          disabled={pending !== null}
-        >
-          {pending === "reject" ? <Spinner size="xs" /> : <XIcon />}
-          Recusar (elimina)
-        </Button>
-      </div>
-    </li>
-  );
-}
-
 /**
  * MASTER ONLY. Rendered from the `secret` the server delivered privately to this
- * socket — nobody else receives it. Holds the answer and the pending guesses to
- * judge (the only place a guess text is ever shown).
+ * socket — nobody else receives it. Holds the answer/explanation for reference
+ * while running the round. Guesses are judged in `PendingGuessModal`, not here.
  */
 export function MasterSecretPanel({ secret }: { secret: RoundSecret }) {
   const [revealed, setRevealed] = useState(false);
-  const pending = secret.pendingGuesses;
 
   return (
     <Card className="ring-warning/25 bg-warning/5">
@@ -197,28 +148,10 @@ export function MasterSecretPanel({ secret }: { secret: RoundSecret }) {
           </div>
         ) : (
           <p className="text-muted-foreground text-sm">
-            Responda às perguntas e julgue os chutes. Ninguém mais vê esta caixa.
+            Responda às perguntas. Quando alguém chutar, você julga na janela que aparece. Ninguém
+            mais vê esta caixa.
           </p>
         )}
-
-        {pending.length > 0 ? (
-          <div className="space-y-2">
-            <p className="text-warning flex items-center gap-1.5 text-xs font-medium">
-              <TrophyIcon className="size-3.5" /> {pending.length}{" "}
-              {pending.length === 1 ? "chute para julgar" : "chutes para julgar"}
-            </p>
-            <ul className="space-y-2">
-              {pending.map((g) => (
-                <PendingGuessRow
-                  key={g.id}
-                  id={g.id}
-                  authorName={g.authorName}
-                  content={g.content}
-                />
-              ))}
-            </ul>
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );
