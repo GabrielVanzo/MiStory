@@ -25,6 +25,10 @@ interface RoomContextValue {
   isHost: boolean;
   /** The narrator of the current round (rotates each round). */
   isMaster: boolean;
+  /** Round created but the master hasn't pressed Iniciar — clock not running. */
+  isWaiting: boolean;
+  /** Clock frozen because a guess is awaiting the master's verdict. */
+  isPaused: boolean;
   /** Whether it is my turn to ask a question. */
   isMyTurn: boolean;
   /** True once my guess was rejected — I'm out of this round. */
@@ -44,6 +48,8 @@ interface RoomContextValue {
   retry: () => void;
   leave: () => Promise<void>;
   startRound: () => Promise<void>;
+  /** Master-only: start the clock on the waiting round. */
+  beginRound: () => Promise<void>;
   finishRound: (outcome: FinishOutcome, solvedById?: string) => Promise<void>;
   restartMatch: () => Promise<void>;
   /** Ask a question (only on your turn). Returns true on success. */
@@ -154,6 +160,20 @@ export function RoomProvider({ code, children }: { code: string; children: React
     }
   }, []);
 
+  const beginRound = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await getSocket().emitWithAck("round:begin");
+      if (!res.ok) setError(realtimeErrorMessage(res.error));
+      // On success the ACTIVE round (with a deadline) arrives via `room:state`.
+    } catch {
+      setError(realtimeErrorMessage("INTERNAL"));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const finishRound = useCallback(async (outcome: FinishOutcome, solvedById?: string) => {
     setBusy(true);
     setError(null);
@@ -251,9 +271,11 @@ export function RoomProvider({ code, children }: { code: string; children: React
       // Track how far our clock is from the server's, so the countdown follows
       // the server's deadline rather than the device clock.
       setOffsetMs(new Date(s.serverTime).getTime() - Date.now());
-      // No active round -> drop any answer we were holding (it is either gone
-      // or now public via `round.reveal`).
-      if (s.round?.status !== "ACTIVE") setSecret(null);
+      // Drop any answer we were holding once the round is over or gone (it is
+      // now public via `round.reveal`). Keep it through WAITING + ACTIVE so the
+      // master can read the story before pressing Iniciar.
+      const live = s.round?.status === "WAITING" || s.round?.status === "ACTIVE";
+      if (!live) setSecret(null);
     };
     // Only the round's master ever receives this event.
     const onSecret = (s: RoundSecret) => setSecret(s);
@@ -300,6 +322,10 @@ export function RoomProvider({ code, children }: { code: string; children: React
   const me = room && playerId ? (room.players.find((p) => p.id === playerId) ?? null) : null;
   const round = room?.round ?? null;
   const isMaster = Boolean(round && me && round.masterId === me.id);
+  const isWaiting = round?.status === "WAITING";
+  // ACTIVE but no live deadline + a frozen remaining => paused for a guess.
+  const isPaused =
+    round?.status === "ACTIVE" && !round.expiresAt && round.pausedRemainingMs != null;
   const isMyTurn = Boolean(round && me && round.currentAskerId === me.id);
   const amEliminated = Boolean(
     round && me && round.guesses.some((g) => g.playerId === me.id && g.status === "REJECTED"),
@@ -313,6 +339,8 @@ export function RoomProvider({ code, children }: { code: string; children: React
     me,
     isHost: Boolean(me?.isHost),
     isMaster,
+    isWaiting,
+    isPaused: Boolean(isPaused),
     isMyTurn,
     amEliminated,
     secret,
@@ -323,6 +351,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
     retry,
     leave,
     startRound,
+    beginRound,
     finishRound,
     restartMatch,
     askQuestion,

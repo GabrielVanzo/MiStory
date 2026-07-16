@@ -149,56 +149,73 @@ function QuestionRow({
   );
 }
 
-/** The round's question log. Identical for everyone — answers land instantly. */
-export function QuestionFeed({ round }: { round: PublicRound }) {
+/**
+ * The round's question log. Identical for everyone — answers land instantly.
+ * `filter="yes"` narrows it to the confirmed ("Sim") questions; the feed is the
+ * one scrolling region inside the room's app-shell, so it grows to fill height.
+ */
+export function QuestionFeed({
+  round,
+  filter = "all",
+}: {
+  round: PublicRound;
+  filter?: "all" | "yes";
+}) {
   const { room, me, isMaster } = useRoom();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const count = round.questions.length;
   const pending = round.questions.filter((q) => !q.answer).length;
   const canAnswer = isMaster && round.status === "ACTIVE";
+  const shown =
+    filter === "yes" ? round.questions.filter((q) => q.answer?.value === "YES") : round.questions;
 
   // Keep the newest question in view as the log grows.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [count]);
+  }, [shown.length]);
 
   const colorOf = (playerId: string | null) =>
     room?.players.find((p) => p.id === playerId)?.color ?? null;
 
   return (
-    <Card className="flex min-h-72 flex-1 flex-col">
+    <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-sm">
-          <span>Perguntas</span>
+          <span>{filter === "yes" ? "Confirmado (Sim)" : "Perguntas"}</span>
           <span className="flex items-center gap-2">
-            {pending > 0 ? <Badge variant="warning">{pending} aguardando</Badge> : null}
-            <Badge variant="secondary">{count}</Badge>
+            {filter === "all" && pending > 0 ? (
+              <Badge variant="warning">{pending} aguardando</Badge>
+            ) : null}
+            <Badge variant="secondary">{shown.length}</Badge>
           </span>
         </CardTitle>
       </CardHeader>
 
       <CardContent className="min-h-0 flex-1 p-0">
-        {count === 0 ? (
+        {shown.length === 0 ? (
           <div className="px-4 pb-4">
             <EmptyState className="border-0 bg-transparent py-10">
               <EmptyStateMedia>
                 <MessageCircleQuestionIcon />
               </EmptyStateMedia>
-              <EmptyStateTitle>Nenhuma pergunta ainda</EmptyStateTitle>
+              <EmptyStateTitle>
+                {filter === "yes" ? "Nada confirmado ainda" : "Nenhuma pergunta ainda"}
+              </EmptyStateTitle>
               <EmptyStateDescription>
-                {isMaster
-                  ? "Assim que os detetives perguntarem, você responde aqui."
-                  : "As perguntas de sim ou não aparecem aqui."}
+                {filter === "yes"
+                  ? 'As perguntas respondidas com "Sim" aparecem aqui.'
+                  : isMaster
+                    ? "Assim que os detetives perguntarem, você responde aqui."
+                    : "As perguntas de sim ou não aparecem aqui."}
               </EmptyStateDescription>
             </EmptyState>
           </div>
         ) : (
-          <div ref={scrollRef} className="h-full max-h-[28rem] overflow-y-auto px-2">
+          <div ref={scrollRef} className="h-full overflow-y-auto px-2">
             {/* Answers land without any action from the reader, so they must be
                 announced rather than silently appear. */}
             <ul className="space-y-1 pb-2" aria-live="polite" aria-relevant="additions text">
-              {round.questions.map((q) => (
+              {shown.map((q) => (
                 <QuestionRow
                   key={q.id}
                   question={q}
@@ -216,18 +233,16 @@ export function QuestionFeed({ round }: { round: PublicRound }) {
 }
 
 /**
- * Composer with turn control. Only the detective whose turn it is can type; the
- * master answers (never asks); an eliminated player is out; everyone else waits
- * and sees whose turn it is.
+ * Composer. A detective can ALWAYS draft their question — the input stays live
+ * even when it isn't their turn — but Enviar / Passar unlock only on their turn
+ * (and once the master has started the round). The master answers (never asks)
+ * and an eliminated player is out.
  */
 export function AskBar({ round }: { round: PublicRound }) {
-  const { askQuestion, passTurn, isMaster, isMyTurn, amEliminated, room } = useRoom();
+  const { askQuestion, passTurn, isMaster, isWaiting, isMyTurn, amEliminated, room } = useRoom();
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const [passing, setPassing] = useState(false);
-  const active = round.status === "ACTIVE";
-
-  if (!active) return null;
 
   if (isMaster) {
     return (
@@ -245,26 +260,17 @@ export function AskBar({ round }: { round: PublicRound }) {
     );
   }
 
-  if (!isMyTurn) {
-    const asker = round.currentAskerId
-      ? room?.players.find((p) => p.id === round.currentAskerId)
-      : null;
-    return (
-      <p className="text-muted-foreground py-1 text-center text-xs">
-        {asker ? (
-          <>
-            Vez de <span className="text-foreground font-medium">{asker.nickname}</span>...
-          </>
-        ) : (
-          "Aguardando a próxima pergunta..."
-        )}
-      </p>
-    );
-  }
+  // Send/pass are live only when the round is running AND it's my turn. The
+  // draft box itself is always editable so you can prepare ahead.
+  const active = round.status === "ACTIVE";
+  const canAct = active && isMyTurn;
+  const asker = round.currentAskerId
+    ? room?.players.find((p) => p.id === round.currentAskerId)
+    : null;
 
   async function send() {
     const text = content.trim();
-    if (!text || sending) return;
+    if (!text || sending || !canAct) return;
     setSending(true);
     const ok = await askQuestion(text);
     if (ok) setContent("");
@@ -272,7 +278,7 @@ export function AskBar({ round }: { round: PublicRound }) {
   }
 
   async function pass() {
-    if (passing) return;
+    if (passing || !canAct) return;
     setPassing(true);
     await passTurn();
     setPassing(false);
@@ -282,10 +288,27 @@ export function AskBar({ round }: { round: PublicRound }) {
 
   return (
     <div className="space-y-1">
-      <p className="text-primary text-center text-xs font-medium">É a sua vez de perguntar</p>
+      <p
+        className={cn(
+          "text-center text-xs font-medium",
+          canAct ? "text-primary" : "text-muted-foreground",
+        )}
+      >
+        {isWaiting ? (
+          "Aguarde o mestre iniciar a rodada — você já pode escrever."
+        ) : canAct ? (
+          "É a sua vez de perguntar"
+        ) : asker ? (
+          <>
+            Vez de <span className="text-foreground font-medium">{asker.nickname}</span> — escreva e
+            envie quando for a sua.
+          </>
+        ) : (
+          "Escreva sua pergunta e aguarde a sua vez."
+        )}
+      </p>
       <div className="flex items-center gap-2">
         <Input
-          autoFocus
           value={content}
           maxLength={QUESTION_MAX}
           disabled={sending || passing}
@@ -303,7 +326,7 @@ export function AskBar({ round }: { round: PublicRound }) {
           size="icon"
           className="size-10 shrink-0"
           onClick={send}
-          disabled={sending || passing || !content.trim()}
+          disabled={sending || passing || !canAct || !content.trim()}
           aria-label="Enviar pergunta"
         >
           {sending ? <Spinner size="sm" /> : <SendHorizontalIcon />}
@@ -312,7 +335,7 @@ export function AskBar({ round }: { round: PublicRound }) {
           variant="outline"
           className="h-10 shrink-0"
           onClick={pass}
-          disabled={sending || passing}
+          disabled={sending || passing || !canAct}
         >
           {passing ? <Spinner size="sm" /> : null} Passar
         </Button>

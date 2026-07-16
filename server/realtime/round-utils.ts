@@ -51,6 +51,15 @@ export async function hasPendingQuestion(roundId: string): Promise<boolean> {
   return pending !== null;
 }
 
+/** Is there a guess still awaiting the master's verdict? Pauses the clock. */
+export async function hasPendingGuesses(roundId: string): Promise<boolean> {
+  const pending = await prisma.guess.findFirst({
+    where: { roundId, status: "PENDING" },
+    select: { id: true },
+  });
+  return pending !== null;
+}
+
 type SeatRow = { id: string; isConnected: boolean };
 
 /** Room players in join order — the fixed seating the turn queue walks around. */

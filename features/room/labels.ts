@@ -23,6 +23,7 @@ export const DIFFICULTY_TONE: Record<Difficulty, BadgeTone> = {
 };
 
 export const ROUND_STATUS_LABEL: Partial<Record<RoundStatus, string>> = {
+  WAITING: "Aguardando início",
   ACTIVE: "Em andamento",
   SOLVED: "Resolvido",
   REVEALED: "Revelado",
@@ -30,6 +31,7 @@ export const ROUND_STATUS_LABEL: Partial<Record<RoundStatus, string>> = {
 };
 
 export const ROUND_STATUS_TONE: Partial<Record<RoundStatus, BadgeTone>> = {
+  WAITING: "warning",
   ACTIVE: "info",
   SOLVED: "success",
   REVEALED: "secondary",

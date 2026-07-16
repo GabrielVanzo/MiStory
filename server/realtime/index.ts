@@ -22,15 +22,18 @@ import {
 } from "./rooms";
 import { resolveGuess, submitGuess } from "./guesses";
 import { answerQuestion, askQuestion, passTurn } from "./questions";
-import { advanceTurn, getActiveRound } from "./round-utils";
+import { advanceTurn, getActiveRound, hasPendingGuesses } from "./round-utils";
 import {
+  beginRound,
   expireRound,
   findOverdueRounds,
   findPendingRounds,
   finishRound,
   getActiveMasterId,
   getActiveRoundSecret,
+  pauseRound,
   restartMatch,
+  resumeRound,
   startRound,
 } from "./rounds";
 
@@ -202,14 +205,31 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
-        // startRound enforces host-only; a non-host gets FORBIDDEN and no data.
-        const { round, expiresAt } = await startRound(roomId, playerId);
-        // The server owns the deadline from this moment on.
-        scheduleRoundExpiry(io, roomId, expiresAt);
+        // Host-only; creates the round in WAITING. No timer yet — the master
+        // starts the clock with round:begin after reading the story.
+        const round = await startRound(roomId, playerId);
         ack({ ok: true, data: round });
         await broadcastState(io, roomId);
         // Hand the secret to whoever the rotation made master.
         await sendSecretToMaster(io, roomId);
+      } catch (error) {
+        ack(toErrorAck(error));
+      }
+    });
+
+    socket.on("round:begin", async (ack) => {
+      const { playerId, roomId } = socket.data;
+      if (!playerId || !roomId) {
+        ack({ ok: false, error: RealtimeError.NOT_IN_ROOM });
+        return;
+      }
+      try {
+        // Master-only; starts the clock on the waiting round.
+        const { round, expiresAt } = await beginRound(roomId, playerId);
+        // The server owns the deadline from this moment on.
+        scheduleRoundExpiry(io, roomId, expiresAt);
+        ack({ ok: true, data: round });
+        await broadcastState(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));
       }
@@ -289,6 +309,10 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
       try {
         // One secret shot per player per round — enforced by a unique index.
         const guess = await submitGuess(roomId, playerId, input);
+        // Freeze the clock while the master decides (idempotent if already
+        // paused by an earlier pending guess). Only the timer stops — questions
+        // keep flowing.
+        if (await pauseRound(roomId)) cancelRoundTimer(roomId);
         ack({ ok: true, data: guess });
         await broadcastState(io, roomId);
         // The master needs the new guess text in their pending list to judge it.
@@ -312,8 +336,15 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
           // Accepted: the round ends right here and the guesser wins.
           await finishRound(roomId, playerId, { outcome: "SOLVED", solvedById: winnerId });
           cancelRoundTimer(roomId);
+        } else {
+          // Rejected: guesser eliminated (turn already advanced). If no other
+          // guess is still pending, resume the frozen clock.
+          const active = await getActiveRound(roomId);
+          if (active && !(await hasPendingGuesses(active.id))) {
+            const expiresAt = await resumeRound(roomId);
+            if (expiresAt) scheduleRoundExpiry(io, roomId, expiresAt);
+          }
         }
-        // Rejected: guesser eliminated; the turn (if theirs) already advanced.
 
         ack({ ok: true, data: guess });
         await broadcastState(io, roomId);

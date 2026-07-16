@@ -32,6 +32,7 @@ const PUBLIC_ROUND_SELECT = {
   currentAskerId: true,
   solvedById: true,
   expiresAt: true,
+  pausedRemainingMs: true,
   enigma: {
     select: { slug: true, title: true, teaser: true, difficulty: true },
   },
@@ -77,6 +78,8 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
     currentAskerId: round.currentAskerId,
     solvedById: round.solvedById,
     expiresAt: finished ? null : (round.expiresAt?.toISOString() ?? null),
+    // Frozen countdown while paused for a guess (ACTIVE + no live deadline).
+    pausedRemainingMs: finished ? null : round.pausedRemainingMs,
     enigma: { ...round.enigma, difficulty: asDifficulty(round.enigma.difficulty) },
     reveal: finished ? await buildReveal(round.id) : null,
     questions: await getQuestions(round.id),
@@ -110,10 +113,13 @@ async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
   };
 }
 
-/** SECRET — the ACTIVE round's secret for a room, if any. */
+/**
+ * SECRET — the live round's secret for a room, if any. Includes WAITING so the
+ * master can read the story before pressing Iniciar.
+ */
 export async function getActiveRoundSecret(roomId: string): Promise<RoundSecret | null> {
   const round = await prisma.round.findFirst({
-    where: { roomId, status: "ACTIVE" },
+    where: { roomId, status: { in: ["WAITING", "ACTIVE"] } },
     orderBy: { number: "desc" },
     select: { id: true },
   });
@@ -142,10 +148,13 @@ async function requireMaster(roomId: string, requesterId: string): Promise<strin
   return round.id;
 }
 
-/** The master's id for the ACTIVE round, if any (used to deliver the secret). */
+/**
+ * The master's id for the live round (WAITING or ACTIVE), if any. Used to
+ * deliver the secret — the master needs it while WAITING to read the story.
+ */
 export async function getActiveMasterId(roomId: string): Promise<string | null> {
   const round = await prisma.round.findFirst({
-    where: { roomId, status: "ACTIVE" },
+    where: { roomId, status: { in: ["WAITING", "ACTIVE"] } },
     orderBy: { number: "desc" },
     select: { masterId: true },
   });
@@ -207,18 +216,21 @@ export interface StartedRound {
 }
 
 /**
- * Starts a round. Host-only trigger, but the MASTER rotates automatically to
- * the next player in join order. The server — not the client — fixes both the
- * deadline and the first detective's turn.
+ * Creates the next round in WAITING — host-only trigger. The MASTER rotates
+ * automatically to the next player in join order, but the countdown does NOT
+ * start yet: the master reads the story and then calls `beginRound` to start
+ * the clock and the first turn.
  */
-export async function startRound(roomId: string, requesterId: string): Promise<StartedRound> {
+export async function startRound(roomId: string, requesterId: string): Promise<PublicRound> {
   await requireHost(roomId, requesterId);
 
-  const active = await prisma.round.findFirst({
-    where: { roomId, status: "ACTIVE" },
+  // A round already waiting OR running blocks a new one — otherwise a second
+  // "Nova rodada" click before the master begins would spawn a duplicate.
+  const inFlight = await prisma.round.findFirst({
+    where: { roomId, status: { in: ["WAITING", "ACTIVE"] } },
     select: { id: true },
   });
-  if (active) throw new RoomError(RealtimeError.ROUND_IN_PROGRESS);
+  if (inFlight) throw new RoomError(RealtimeError.ROUND_IN_PROGRESS);
 
   const masterId = await pickNextMaster(roomId);
   const enigmaId = await pickRandomEnigmaId(roomId);
@@ -229,17 +241,10 @@ export async function startRound(roomId: string, requesterId: string): Promise<S
   });
   const number = (last?.number ?? 0) + 1;
 
-  const startedAt = new Date();
-  const expiresAt = new Date(startedAt.getTime() + REALTIME_CONFIG.roundDurationMs);
-
-  const created = await prisma.round.create({
-    data: { roomId, enigmaId, masterId, number, status: "ACTIVE", startedAt, expiresAt },
-    select: { id: true, roomId: true, masterId: true, currentAskerId: true },
+  // No startedAt/expiresAt/currentAskerId yet — beginRound fills those in.
+  await prisma.round.create({
+    data: { roomId, enigmaId, masterId, number, status: "WAITING" },
   });
-
-  // First turn goes to the first eligible detective (nobody is eliminated yet).
-  const asker = await firstAsker(created);
-  await prisma.round.update({ where: { id: created.id }, data: { currentAskerId: asker } });
 
   await prisma.room.update({
     where: { id: roomId },
@@ -248,7 +253,82 @@ export async function startRound(roomId: string, requesterId: string): Promise<S
 
   const round = await getPublicRound(roomId);
   if (!round) throw new RoomError(RealtimeError.INTERNAL);
+  return round;
+}
+
+/**
+ * The master starts the clock on the WAITING round they were handed: fixes the
+ * server-authoritative deadline and gives the first turn to the first eligible
+ * detective. Master-only.
+ */
+export async function beginRound(roomId: string, requesterId: string): Promise<StartedRound> {
+  const waiting = await prisma.round.findFirst({
+    where: { roomId, status: "WAITING" },
+    orderBy: { number: "desc" },
+    select: { id: true, roomId: true, masterId: true, currentAskerId: true },
+  });
+  if (!waiting) {
+    // Nothing waiting: either a round is already running, or none exists.
+    const active = await prisma.round.findFirst({
+      where: { roomId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    throw new RoomError(active ? RealtimeError.ROUND_IN_PROGRESS : RealtimeError.NO_ACTIVE_ROUND);
+  }
+  if (waiting.masterId !== requesterId) throw new RoomError(RealtimeError.FORBIDDEN);
+
+  const startedAt = new Date();
+  const expiresAt = new Date(startedAt.getTime() + REALTIME_CONFIG.roundDurationMs);
+  // First turn goes to the first eligible detective (nobody is eliminated yet).
+  const asker = await firstAsker(waiting);
+
+  await prisma.round.update({
+    where: { id: waiting.id },
+    data: { status: "ACTIVE", startedAt, expiresAt, currentAskerId: asker },
+  });
+
+  const round = await getPublicRound(roomId);
+  if (!round) throw new RoomError(RealtimeError.INTERNAL);
   return { round, expiresAt };
+}
+
+/**
+ * Freezes the ACTIVE round's clock for a pending guess: stores the time left
+ * and clears the live deadline. Returns true only when it actually paused a
+ * running round (idempotent — a second guess finds it already paused).
+ */
+export async function pauseRound(roomId: string): Promise<boolean> {
+  const round = await prisma.round.findFirst({
+    where: { roomId, status: "ACTIVE", expiresAt: { not: null } },
+    orderBy: { number: "desc" },
+    select: { id: true, expiresAt: true },
+  });
+  if (!round?.expiresAt) return false;
+  const remaining = Math.max(0, round.expiresAt.getTime() - Date.now());
+  await prisma.round.update({
+    where: { id: round.id },
+    data: { expiresAt: null, pausedRemainingMs: remaining },
+  });
+  return true;
+}
+
+/**
+ * Restarts a paused round's clock from the frozen time left. Returns the new
+ * deadline for the caller to schedule, or null if the round wasn't paused.
+ */
+export async function resumeRound(roomId: string): Promise<Date | null> {
+  const round = await prisma.round.findFirst({
+    where: { roomId, status: "ACTIVE", expiresAt: null, pausedRemainingMs: { not: null } },
+    orderBy: { number: "desc" },
+    select: { id: true, pausedRemainingMs: true },
+  });
+  if (round?.pausedRemainingMs == null) return null;
+  const expiresAt = new Date(Date.now() + round.pausedRemainingMs);
+  await prisma.round.update({
+    where: { id: round.id },
+    data: { expiresAt, pausedRemainingMs: null },
+  });
+  return expiresAt;
 }
 
 /**

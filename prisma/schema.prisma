@@ -156,7 +156,10 @@ model Round {
   /// Server-authoritative deadline. The server enforces expiry; clients only
   /// render a countdown towards this instant.
   expiresAt DateTime?
-  endedAt   DateTime?
+  /// Frozen time left (ms) while the round is paused for a pending guess. Set
+  /// only while paused; null whenever the clock is running (`expiresAt` set).
+  pausedRemainingMs Int?
+  endedAt           DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 

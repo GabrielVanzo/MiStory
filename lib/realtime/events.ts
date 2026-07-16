@@ -89,8 +89,16 @@ export interface PublicRound {
   /** Whose turn it is to ask, or null when nobody can (queue empty/round over). */
   currentAskerId: string | null;
   enigma: PublicEnigma;
-  /** Server-authoritative deadline (ISO). Null once the round is over. */
+  /**
+   * Server-authoritative deadline (ISO). Null when the round is over, still
+   * WAITING (the master hasn't pressed Iniciar), or paused during a guess.
+   */
   expiresAt: string | null;
+  /**
+   * Frozen time left (ms) while the round is paused for a pending guess. Null
+   * whenever the clock is running (see `expiresAt`) or the round isn't ACTIVE.
+   */
+  pausedRemainingMs: number | null;
   /** Who cracked it, when the round ended as SOLVED. */
   solvedById: string | null;
   /** Populated ONLY after the round ends — then it is public to everyone. */
@@ -225,8 +233,10 @@ export interface ClientToServerEvents {
   "room:create": (input: CreateRoomInput, ack: (res: Ack<RoomJoinedPayload>) => void) => void;
   "room:join": (input: JoinRoomInput, ack: (res: Ack<RoomJoinedPayload>) => void) => void;
   "room:leave": (ack: (res: Ack<null>) => void) => void;
-  /** Host-only: starts a round; the master rotates to the next player. */
+  /** Host-only: creates the next round in WAITING; the master rotates to the next player. */
   "round:start": (ack: (res: Ack<PublicRound>) => void) => void;
+  /** Master-only: starts the clock on the waiting round (after reading the story). */
+  "round:begin": (ack: (res: Ack<PublicRound>) => void) => void;
   /** Master-only: ends the active round and reveals the solution to everyone. */
   "round:finish": (input: FinishRoundInput, ack: (res: Ack<PublicRound>) => void) => void;
   /** Host-only: clears round history and returns the room to the lobby. */

@@ -5,7 +5,9 @@ import {
   CheckIcon,
   EyeIcon,
   EyeOffIcon,
+  HourglassIcon,
   LockIcon,
+  PauseIcon,
   TimerIcon,
   TrophyIcon,
   UnlockIcon,
@@ -50,6 +52,20 @@ function RoundTimer({ expiresAt }: { expiresAt: string }) {
   );
 }
 
+/** Frozen countdown shown while the clock is paused for a pending guess. */
+function PausedTimer({ remainingMs }: { remainingMs: number }) {
+  return (
+    <div
+      className="text-warning flex items-center gap-1.5 font-mono text-sm tabular-nums"
+      aria-live="polite"
+    >
+      <PauseIcon className="size-4" />
+      {formatCountdown(remainingMs)}
+      <span className="font-sans text-xs">pausado</span>
+    </div>
+  );
+}
+
 /** Public enigma — shown to every player in the room. */
 export function EnigmaCard({ round }: { round: PublicRound }) {
   const level = round.enigma.difficulty;
@@ -72,6 +88,12 @@ export function EnigmaCard({ round }: { round: PublicRound }) {
             </div>
             {round.status === "ACTIVE" && round.expiresAt ? (
               <RoundTimer expiresAt={round.expiresAt} />
+            ) : round.status === "ACTIVE" && round.pausedRemainingMs != null ? (
+              <PausedTimer remainingMs={round.pausedRemainingMs} />
+            ) : round.status === "WAITING" ? (
+              <span className="text-muted-foreground flex items-center gap-1.5 text-sm">
+                <HourglassIcon className="size-4" /> À espera do mestre
+              </span>
             ) : null}
           </div>
         </div>

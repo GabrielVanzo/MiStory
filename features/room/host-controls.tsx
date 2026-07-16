@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckIcon, RotateCcwIcon, SparklesIcon, UnlockIcon } from "lucide-react";
+import { CheckIcon, PlayIcon, RotateCcwIcon, SparklesIcon, UnlockIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,11 +20,37 @@ import { useRoom } from "@/features/room/room-provider";
  * starts the next one / restarts the match. The server validates both.
  */
 export function RoundControls() {
-  const { room, me, isHost, isMaster, busy, finishRound, startRound, restartMatch } = useRoom();
+  const { room, me, isHost, isMaster, busy, beginRound, finishRound, startRound, restartMatch } =
+    useRoom();
   const [solvedBy, setSolvedBy] = useState<string>("");
 
   if (!room?.round) return null;
   const round = room.round;
+
+  // Waiting to begin: the master reads the story, then starts the clock. The
+  // countdown and questions only open up after this.
+  if (round.status === "WAITING") {
+    if (!isMaster) {
+      return (
+        <p className="text-muted-foreground py-1 text-center text-sm">
+          O mestre está lendo a história. A rodada começa em instantes.
+        </p>
+      );
+    }
+    return (
+      <Card size="sm">
+        <CardContent className="flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
+          <p className="text-muted-foreground text-sm">
+            Leia a solução em segredo e comece quando estiver pronto.
+          </p>
+          <Button onClick={beginRound} disabled={busy}>
+            {busy ? <Spinner size="sm" /> : <PlayIcon />}
+            Iniciar rodada
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   // Running round: only the master can close it (usually a guess does it, but
   // they may also mark a verbal solve or just reveal).
