@@ -151,11 +151,11 @@ function QuestionRow({
 
 /** The round's question log. Identical for everyone — answers land instantly. */
 export function QuestionFeed({ round }: { round: PublicRound }) {
-  const { room, me, isHost } = useRoom();
+  const { room, me, isMaster } = useRoom();
   const scrollRef = useRef<HTMLDivElement>(null);
   const count = round.questions.length;
   const pending = round.questions.filter((q) => !q.answer).length;
-  const canAnswer = isHost && round.status === "ACTIVE";
+  const canAnswer = isMaster && round.status === "ACTIVE";
 
   // Keep the newest question in view as the log grows.
   useEffect(() => {
@@ -187,9 +187,9 @@ export function QuestionFeed({ round }: { round: PublicRound }) {
               </EmptyStateMedia>
               <EmptyStateTitle>Nenhuma pergunta ainda</EmptyStateTitle>
               <EmptyStateDescription>
-                {isHost
+                {isMaster
                   ? "Assim que os detetives perguntarem, você responde aqui."
-                  : "Faça a primeira pergunta de sim ou não."}
+                  : "As perguntas de sim ou não aparecem aqui."}
               </EmptyStateDescription>
             </EmptyState>
           </div>
@@ -215,14 +215,21 @@ export function QuestionFeed({ round }: { round: PublicRound }) {
   );
 }
 
-/** Composer. Hidden for the host — the master answers, never asks. */
+/**
+ * Composer with turn control. Only the detective whose turn it is can type; the
+ * master answers (never asks); an eliminated player is out; everyone else waits
+ * and sees whose turn it is.
+ */
 export function AskBar({ round }: { round: PublicRound }) {
-  const { askQuestion, isHost } = useRoom();
+  const { askQuestion, passTurn, isMaster, isMyTurn, amEliminated, room } = useRoom();
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
+  const [passing, setPassing] = useState(false);
   const active = round.status === "ACTIVE";
 
-  if (isHost) {
+  if (!active) return null;
+
+  if (isMaster) {
     return (
       <p className="text-muted-foreground py-1 text-center text-xs">
         Você é o mestre — responda às perguntas acima.
@@ -230,27 +237,59 @@ export function AskBar({ round }: { round: PublicRound }) {
     );
   }
 
+  if (amEliminated) {
+    return (
+      <p className="text-muted-foreground py-1 text-center text-xs">
+        Você está fora desta rodada. Aguarde a próxima história.
+      </p>
+    );
+  }
+
+  if (!isMyTurn) {
+    const asker = round.currentAskerId
+      ? room?.players.find((p) => p.id === round.currentAskerId)
+      : null;
+    return (
+      <p className="text-muted-foreground py-1 text-center text-xs">
+        {asker ? (
+          <>
+            Vez de <span className="text-foreground font-medium">{asker.nickname}</span>...
+          </>
+        ) : (
+          "Aguardando a próxima pergunta..."
+        )}
+      </p>
+    );
+  }
+
   async function send() {
     const text = content.trim();
-    if (!text || sending || !active) return;
+    if (!text || sending) return;
     setSending(true);
     const ok = await askQuestion(text);
     if (ok) setContent("");
     setSending(false);
   }
 
+  async function pass() {
+    if (passing) return;
+    setPassing(true);
+    await passTurn();
+    setPassing(false);
+  }
+
   const remaining = QUESTION_MAX - content.length;
 
   return (
     <div className="space-y-1">
+      <p className="text-primary text-center text-xs font-medium">É a sua vez de perguntar</p>
       <div className="flex items-center gap-2">
         <Input
+          autoFocus
           value={content}
           maxLength={QUESTION_MAX}
-          disabled={!active || sending}
-          placeholder={
-            active ? "Faça uma pergunta de sim ou não..." : "A rodada não está em andamento"
-          }
+          disabled={sending || passing}
+          placeholder="Faça uma pergunta de sim ou não..."
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -264,10 +303,18 @@ export function AskBar({ round }: { round: PublicRound }) {
           size="icon"
           className="size-10 shrink-0"
           onClick={send}
-          disabled={!active || sending || !content.trim()}
+          disabled={sending || passing || !content.trim()}
           aria-label="Enviar pergunta"
         >
           {sending ? <Spinner size="sm" /> : <SendHorizontalIcon />}
+        </Button>
+        <Button
+          variant="outline"
+          className="h-10 shrink-0"
+          onClick={pass}
+          disabled={sending || passing}
+        >
+          {passing ? <Spinner size="sm" /> : null} Passar
         </Button>
       </div>
       {remaining <= 40 ? (

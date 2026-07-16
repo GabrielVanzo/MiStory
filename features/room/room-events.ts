@@ -30,7 +30,6 @@ export function diffRoomEvents(
   previous: RoomState | null,
   next: RoomState | null,
   myId: string | null,
-  isHost: boolean,
 ): RoomEvent[] {
   if (!previous || !next) return [];
   const events: RoomEvent[] = [];
@@ -61,7 +60,7 @@ export function diffRoomEvents(
         kind: "host:me",
         tone: "info",
         title: "Você agora é o anfitrião",
-        description: "Você conduz a partida e vê a solução.",
+        description: "Você inicia as rodadas e reinicia a partida.",
       });
     } else {
       const host = next.players.find((p) => p.id === next.hostId);
@@ -77,6 +76,9 @@ export function diffRoomEvents(
 
   const round = next.round;
   const previousRound = previous.round;
+  // The master rotates every round, so it is derived from the current round
+  // rather than a fixed flag like `isHost`.
+  const iAmMaster = round?.masterId === myId;
 
   // ---------------------------------------------------------- round start
   if (round && round.id !== previousRound?.id && round.status === "ACTIVE") {
@@ -86,6 +88,30 @@ export function diffRoomEvents(
       title: `Rodada ${round.number} começou!`,
       description: round.enigma.title,
     });
+    if (iAmMaster) {
+      events.push({
+        kind: "master:me",
+        tone: "info",
+        title: "Você é o mestre desta rodada",
+        description: "Você vê a solução, responde às perguntas e julga os chutes.",
+      });
+    }
+  }
+
+  // ---------------------------------------------------------- my turn to ask
+  // Fires when the turn pointer lands on me — both at round start (I'm the
+  // first asker) and after the previous detective asked or passed. The master
+  // never asks, so it is skipped for them.
+  if (round && round.status === "ACTIVE" && !iAmMaster && round.currentAskerId === myId) {
+    const wasMyTurn = previousRound?.id === round.id && previousRound.currentAskerId === myId;
+    if (!wasMyTurn) {
+      events.push({
+        kind: "turn:mine",
+        tone: "info",
+        title: "É a sua vez de perguntar",
+        description: "Faça uma pergunta de sim ou não, ou passe a vez.",
+      });
+    }
   }
 
   // ---------------------------------------------------------- round end
@@ -147,23 +173,24 @@ export function diffRoomEvents(
       events.push({
         kind: "guess:rejected",
         tone: "error",
-        title: "Chute recusado",
-        description: "Você não pode tentar novamente nesta rodada.",
+        title: "Chute recusado — você está fora desta rodada",
+        description: "Você não faz mais perguntas nem chutes até a próxima história.",
       });
     }
   }
 
-  // ---------------------------------------------------------- host: a guess needs judging
+  // ---------------------------------------------------------- master: a guess needs judging
   // Questions are NOT announced: they arrive often and the feed already rings
   // them. A guess is rare and blocks the round, so it earns an interruption.
-  if (isHost) {
+  // Only the master can judge, so only the master is interrupted.
+  if (iAmMaster) {
     for (const guess of round?.guesses ?? []) {
       if (!previousGuesses.has(guess.id) && guess.status === "PENDING") {
         events.push({
           kind: "guess:needs-judging",
           tone: "warning",
           title: `${guess.authorName} acha que já sabe!`,
-          description: "Aceite ou rejeite o chute.",
+          description: "Aceite (vence) ou recuse (elimina) o chute.",
         });
       }
     }

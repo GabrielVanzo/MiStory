@@ -39,11 +39,13 @@ export interface PublicEnigma {
 
 /**
  * The solution, made public once the round is over. Until then this is null
- * and the answer exists only in the host's private `RoundSecret`.
+ * and the answer exists only in the master's private `RoundSecret`.
  */
 export interface RoundReveal {
   answer: string;
   explanation: string;
+  /** The winning guess text, revealed only when the round was SOLVED. */
+  winnerGuess: string | null;
 }
 
 /** A question asked during a round, with the master's reply when answered. */
@@ -59,13 +61,19 @@ export interface QuestionDTO {
   answer: { value: AnswerValue; createdAt: string } | null;
 }
 
-/** A player's single shot at the solution ("chute"), judged by the host. */
+/**
+ * PUBLIC projection of a guess.
+ *
+ * SECURITY: there is NO `content` here. A guess text is secret — only the master
+ * sees it (via `RoundSecret.pendingGuesses`), and the winning one is revealed to
+ * everyone through `RoundReveal.winnerGuess`. Rejected guesses stay hidden
+ * forever; the public only learns *who* guessed and *how it went*.
+ */
 export interface GuessDTO {
   id: string;
   /** Null once the guesser leaves — the log outlives them. */
   playerId: string | null;
   authorName: string;
-  content: string;
   status: GuessStatus;
   createdAt: string;
   resolvedAt: string | null;
@@ -76,8 +84,10 @@ export interface PublicRound {
   id: string;
   number: number;
   status: RoundStatus;
-  /** The player narrating this round (the host). */
+  /** The player narrating this round (the round master — rotates each round). */
   masterId: string | null;
+  /** Whose turn it is to ask, or null when nobody can (queue empty/round over). */
+  currentAskerId: string | null;
   enigma: PublicEnigma;
   /** Server-authoritative deadline (ISO). Null once the round is over. */
   expiresAt: string | null;
@@ -87,12 +97,20 @@ export interface PublicRound {
   reveal: RoundReveal | null;
   /** The round's question log, oldest first. Public to everyone. */
   questions: QuestionDTO[];
-  /** The round's guesses, oldest first. Public to everyone. */
+  /** The round's guesses (no text), oldest first. Public to everyone. */
   guesses: GuessDTO[];
 }
 
+/** A pending guess, shown only to the master so they can judge it. */
+export interface PendingGuess {
+  id: string;
+  authorName: string;
+  content: string;
+}
+
 /**
- * SECRET payload. Only ever emitted to the host's own socket, never broadcast.
+ * SECRET payload. Only ever emitted to the MASTER's own socket, never broadcast.
+ * Carries both the enigma solution and the text of guesses awaiting judgement.
  */
 export interface RoundSecret {
   roundId: string;
@@ -100,6 +118,8 @@ export interface RoundSecret {
   answer: string;
   /** "explicação" — the reasoning. */
   explanation: string;
+  /** Texts of the guesses the master still has to accept or reject. */
+  pendingGuesses: PendingGuess[];
 }
 
 /**
@@ -190,28 +210,36 @@ export type Ack<T> = { ok: true; data: T } | { ok: false; error: string };
 export interface ServerToClientEvents {
   "room:state": (state: RoomState) => void;
   "room:closed": (reason: string) => void;
-  /** HOST ONLY — emitted to a single socket, never to a room. */
+  /** MASTER ONLY — emitted to a single socket, never to a room. */
   "round:secret": (secret: RoundSecret) => void;
 }
 
-/** Client → server events (all use ack callbacks). */
+/**
+ * Client → server events (all use ack callbacks).
+ *
+ * Roles: the **host** owns the room (start round, restart match). The **master**
+ * narrates the current round and rotates each round — they answer questions and
+ * judge guesses, and they cannot ask or guess. Everyone else is a **detective**.
+ */
 export interface ClientToServerEvents {
   "room:create": (input: CreateRoomInput, ack: (res: Ack<RoomJoinedPayload>) => void) => void;
   "room:join": (input: JoinRoomInput, ack: (res: Ack<RoomJoinedPayload>) => void) => void;
   "room:leave": (ack: (res: Ack<null>) => void) => void;
-  /** Host-only: starts a round with a randomly chosen enigma. */
+  /** Host-only: starts a round; the master rotates to the next player. */
   "round:start": (ack: (res: Ack<PublicRound>) => void) => void;
-  /** Host-only: ends the active round and reveals the solution to everyone. */
+  /** Master-only: ends the active round and reveals the solution to everyone. */
   "round:finish": (input: FinishRoundInput, ack: (res: Ack<PublicRound>) => void) => void;
   /** Host-only: clears round history and returns the room to the lobby. */
   "match:restart": (ack: (res: Ack<null>) => void) => void;
-  /** Any detective (not the host): ask a yes/no question in the active round. */
+  /** The detective whose turn it is: ask a yes/no question. */
   "question:ask": (input: AskQuestionInput, ack: (res: Ack<QuestionDTO>) => void) => void;
-  /** Host-only: reply Sim / Não / Irrelevante to a question. */
+  /** The detective whose turn it is: skip, passing the turn on. */
+  "turn:pass": (ack: (res: Ack<null>) => void) => void;
+  /** Master-only: reply Sim / Não / Irrelevante to a question. */
   "question:answer": (input: AnswerQuestionInput, ack: (res: Ack<QuestionDTO>) => void) => void;
-  /** Detective's single shot at the solution — one per round, ever. */
+  /** Detective's single secret shot at the solution — one per round, ever. */
   "guess:submit": (input: SubmitGuessInput, ack: (res: Ack<GuessDTO>) => void) => void;
-  /** Host-only: accept (ends the round, guesser wins) or reject (shot spent). */
+  /** Master-only: accept (ends round, guesser wins) or reject (guesser eliminated). */
   "guess:resolve": (input: ResolveGuessInput, ack: (res: Ack<GuessDTO>) => void) => void;
 }
 
@@ -259,16 +287,22 @@ export const RealtimeError = {
   NICKNAME_TAKEN: "NICKNAME_TAKEN",
   INVALID_INPUT: "INVALID_INPUT",
   NOT_IN_ROOM: "NOT_IN_ROOM",
-  /** Action requires being the host. */
+  /** Action requires being the host (start round / restart match). */
   FORBIDDEN: "FORBIDDEN",
   ROUND_IN_PROGRESS: "ROUND_IN_PROGRESS",
   NO_ACTIVE_ROUND: "NO_ACTIVE_ROUND",
   NO_ENIGMAS: "NO_ENIGMAS",
+  /** A round needs at least one master and one detective. */
+  NOT_ENOUGH_PLAYERS: "NOT_ENOUGH_PLAYERS",
   QUESTION_NOT_FOUND: "QUESTION_NOT_FOUND",
-  /** The host narrates — they cannot ask questions. */
-  HOST_CANNOT_ASK: "HOST_CANNOT_ASK",
-  /** The host knows the answer — they cannot guess. */
-  HOST_CANNOT_GUESS: "HOST_CANNOT_GUESS",
+  /** The master narrates — they cannot ask questions. */
+  MASTER_CANNOT_ASK: "MASTER_CANNOT_ASK",
+  /** The master knows the answer — they cannot guess. */
+  MASTER_CANNOT_GUESS: "MASTER_CANNOT_GUESS",
+  /** Not this player's turn to ask / pass. */
+  NOT_YOUR_TURN: "NOT_YOUR_TURN",
+  /** This player's guess was rejected — they are out of this round. */
+  ELIMINATED: "ELIMINATED",
   /** One shot per round: this player already used theirs. */
   GUESS_ALREADY_USED: "GUESS_ALREADY_USED",
   GUESS_NOT_FOUND: "GUESS_NOT_FOUND",

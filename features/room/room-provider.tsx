@@ -21,10 +21,17 @@ interface RoomContextValue {
   connection: Connection;
   room: RoomState | null;
   me: PlayerDTO | null;
+  /** Room owner: controls start round / restart match. */
   isHost: boolean;
+  /** The narrator of the current round (rotates each round). */
+  isMaster: boolean;
+  /** Whether it is my turn to ask a question. */
+  isMyTurn: boolean;
+  /** True once my guess was rejected — I'm out of this round. */
+  amEliminated: boolean;
   /**
-   * The round's answer/explanation. Only ever populated for the host — the
-   * server never sends `round:secret` to anyone else.
+   * The round's answer + pending guess texts. Only ever populated for the
+   * MASTER — the server never sends `round:secret` to anyone else.
    */
   secret: RoundSecret | null;
   /** Server clock minus local clock (ms). Feeds the countdown. */
@@ -39,12 +46,14 @@ interface RoomContextValue {
   startRound: () => Promise<void>;
   finishRound: (outcome: FinishOutcome, solvedById?: string) => Promise<void>;
   restartMatch: () => Promise<void>;
-  /** Ask a question. Returns true on success so the input can clear itself. */
+  /** Ask a question (only on your turn). Returns true on success. */
   askQuestion: (content: string) => Promise<boolean>;
+  /** Skip your turn without asking. */
+  passTurn: () => Promise<void>;
   answerQuestion: (questionId: string, value: AnswerValue) => Promise<void>;
-  /** Submit this player's single shot at the solution. */
+  /** Submit this player's single secret shot at the solution. */
   submitGuess: (content: string) => Promise<boolean>;
-  /** Host-only: accept (ends the round) or reject (spends the shot). */
+  /** Master-only: accept (ends the round) or reject (eliminates the guesser). */
   resolveGuess: (guessId: string, accept: boolean) => Promise<void>;
 }
 
@@ -136,8 +145,8 @@ export function RoomProvider({ code, children }: { code: string; children: React
     try {
       const res = await getSocket().emitWithAck("round:start");
       if (!res.ok) setError(realtimeErrorMessage(res.error));
-      // On success the round arrives via `room:state` and, for the host, the
-      // answer via `round:secret`.
+      // On success the round arrives via `room:state` and, for the round's
+      // master, the answer via `round:secret`.
     } catch {
       setError(realtimeErrorMessage("INTERNAL"));
     } finally {
@@ -172,6 +181,16 @@ export function RoomProvider({ code, children }: { code: string; children: React
     } catch {
       setError(realtimeErrorMessage("INTERNAL"));
       return false;
+    }
+  }, []);
+
+  const passTurn = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await getSocket().emitWithAck("turn:pass");
+      if (!res.ok) setError(realtimeErrorMessage(res.error));
+    } catch {
+      setError(realtimeErrorMessage("INTERNAL"));
     }
   }, []);
 
@@ -236,7 +255,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
       // or now public via `round.reveal`).
       if (s.round?.status !== "ACTIVE") setSecret(null);
     };
-    // Only the host ever receives this event.
+    // Only the round's master ever receives this event.
     const onSecret = (s: RoundSecret) => setSecret(s);
     const onClosed = () => {
       clearIdentity(code);
@@ -279,6 +298,12 @@ export function RoomProvider({ code, children }: { code: string; children: React
   }, [code, resume]);
 
   const me = room && playerId ? (room.players.find((p) => p.id === playerId) ?? null) : null;
+  const round = room?.round ?? null;
+  const isMaster = Boolean(round && me && round.masterId === me.id);
+  const isMyTurn = Boolean(round && me && round.currentAskerId === me.id);
+  const amEliminated = Boolean(
+    round && me && round.guesses.some((g) => g.playerId === me.id && g.status === "REJECTED"),
+  );
 
   const value: RoomContextValue = {
     code,
@@ -287,6 +312,9 @@ export function RoomProvider({ code, children }: { code: string; children: React
     room,
     me,
     isHost: Boolean(me?.isHost),
+    isMaster,
+    isMyTurn,
+    amEliminated,
     secret,
     offsetMs,
     busy,
@@ -298,6 +326,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
     finishRound,
     restartMatch,
     askQuestion,
+    passTurn,
     answerQuestion,
     submitGuess,
     resolveGuess,

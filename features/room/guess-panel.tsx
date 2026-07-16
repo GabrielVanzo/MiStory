@@ -1,10 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { CheckIcon, LightbulbIcon, TrophyIcon, XIcon } from "lucide-react";
+import { BanIcon, LightbulbIcon, TrophyIcon } from "lucide-react";
 
 import type { GuessDTO, PublicRound } from "@/lib/realtime/events";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,21 +26,20 @@ import { useRoom } from "@/features/room/room-provider";
 const GUESS_MAX = 300;
 
 /**
- * The "Já sei." button + modal. Each detective gets exactly one shot per round;
- * once used (accepted or rejected) the button stays disabled — the server
- * enforces it regardless.
+ * The "Já sei." button + modal. A detective's single, SECRET shot: the text
+ * goes only to the master. Once used (or once eliminated) the button reflects
+ * that; the server enforces the single shot regardless.
  */
 export function GuessButton({ round }: { round: PublicRound }) {
-  const { me, isHost, submitGuess, error } = useRoom();
+  const { me, isMaster, amEliminated, submitGuess, error } = useRoom();
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
 
-  if (isHost) return null;
+  if (isMaster) return null;
 
   const myGuess = round.guesses.find((g) => g.playerId === me?.id);
   const active = round.status === "ACTIVE";
-  const spent = Boolean(myGuess);
 
   async function send() {
     const text = content.trim();
@@ -55,13 +53,21 @@ export function GuessButton({ round }: { round: PublicRound }) {
     }
   }
 
-  if (spent) {
+  if (amEliminated) {
+    return (
+      <Button variant="outline" className="w-full shrink-0 sm:w-auto" disabled>
+        <BanIcon /> Você está fora desta rodada
+      </Button>
+    );
+  }
+
+  if (myGuess) {
     const label =
-      myGuess?.status === "PENDING"
+      myGuess.status === "PENDING"
         ? "Chute enviado — aguardando o mestre"
-        : myGuess?.status === "ACCEPTED"
+        : myGuess.status === "ACCEPTED"
           ? "Você acertou!"
-          : "Seu chute foi usado";
+          : "Chute usado";
     return (
       <Button variant="outline" className="w-full shrink-0 sm:w-auto" disabled>
         <LightbulbIcon /> {label}
@@ -80,8 +86,9 @@ export function GuessButton({ round }: { round: PublicRound }) {
         <DialogHeader>
           <DialogTitle>Qual é a sua solução?</DialogTitle>
           <DialogDescription>
-            Você tem <strong>um único chute</strong> nesta rodada. Se o mestre recusar, não poderá
-            tentar de novo.
+            Só o <strong>mestre</strong> vê o seu chute. Você tem{" "}
+            <strong>uma única tentativa</strong>: se ele recusar, você fica de fora até a próxima
+            rodada.
           </DialogDescription>
         </DialogHeader>
 
@@ -122,109 +129,56 @@ export function GuessButton({ round }: { round: PublicRound }) {
 function GuessRow({
   guess,
   color,
-  canJudge,
   isWinner,
 }: {
   guess: GuessDTO;
   color: string | null;
-  canJudge: boolean;
   isWinner: boolean;
 }) {
-  const { resolveGuess } = useRoom();
-  const [pending, setPending] = useState<"accept" | "reject" | null>(null);
-
-  async function judge(accept: boolean) {
-    setPending(accept ? "accept" : "reject");
-    await resolveGuess(guess.id, accept);
-    setPending(null);
-  }
-
   return (
-    <li
-      className={cn(
-        "animate-in fade-in slide-in-from-bottom-2 rounded-xl px-3 py-2.5 transition-colors duration-300",
-        isWinner && "bg-success/10 ring-success/25 ring-1",
-        !isWinner &&
-          guess.status === "PENDING" &&
-          canJudge &&
-          "bg-warning/5 ring-warning/20 ring-1",
-        !isWinner && guess.status === "REJECTED" && "opacity-60",
+    <li className="flex items-center gap-3 rounded-lg px-2 py-1.5">
+      <PlayerAvatar name={guess.authorName} color={color} />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{guess.authorName}</span>
+      {isWinner ? (
+        <Badge variant="success" className="gap-1">
+          <TrophyIcon /> Venceu
+        </Badge>
+      ) : guess.status === "REJECTED" ? (
+        <Badge variant="destructive">Eliminado</Badge>
+      ) : (
+        <Badge variant="warning">Chutou</Badge>
       )}
-    >
-      <div className="flex items-start gap-3">
-        <PlayerAvatar name={guess.authorName} color={color} className="mt-0.5" />
-
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium">{guess.authorName}</span>
-            {isWinner ? (
-              <Badge variant="success" className="gap-1">
-                <TrophyIcon /> Venceu
-              </Badge>
-            ) : guess.status === "REJECTED" ? (
-              <Badge variant="destructive">Recusado</Badge>
-            ) : (
-              <Badge variant="warning">Aguardando</Badge>
-            )}
-          </div>
-
-          <p className="text-pretty">{guess.content}</p>
-
-          {canJudge && guess.status === "PENDING" ? (
-            <div className="flex gap-2 pt-1">
-              <Button size="sm" onClick={() => judge(true)} disabled={pending !== null}>
-                {pending === "accept" ? <Spinner size="xs" /> : <CheckIcon />}
-                Aceitar
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => judge(false)}
-                disabled={pending !== null}
-              >
-                {pending === "reject" ? <Spinner size="xs" /> : <XIcon />}
-                Rejeitar
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
     </li>
   );
 }
 
-/** The round's guesses. Rendered only once someone has taken a shot. */
+/**
+ * Public scoreboard of guesses — WHO guessed and how it went, never the text.
+ * The text lives only in the master's private panel and, for the winner, in the
+ * reveal. Rendered only once someone has taken a shot.
+ */
 export function GuessPanel({ round }: { round: PublicRound }) {
-  const { room, isHost } = useRoom();
+  const { room } = useRoom();
   if (round.guesses.length === 0) return null;
 
-  const canJudge = isHost && round.status === "ACTIVE";
-  const pending = round.guesses.filter((g) => g.status === "PENDING").length;
   const colorOf = (playerId: string | null) =>
     room?.players.find((p) => p.id === playerId)?.color ?? null;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2">
-            <LightbulbIcon className="text-warning size-4" /> Chutes
-          </span>
-          {pending > 0 && canJudge ? (
-            <Badge variant="warning">{pending} para julgar</Badge>
-          ) : (
-            <Badge variant="secondary">{round.guesses.length}</Badge>
-          )}
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <LightbulbIcon className="text-warning size-4" /> Chutes
+          <Badge variant="secondary">{round.guesses.length}</Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="px-2">
-        <ul className="space-y-1">
+        <ul className="space-y-0.5">
           {round.guesses.map((g) => (
             <GuessRow
               key={g.id}
               guess={g}
               color={colorOf(g.playerId)}
-              canJudge={canJudge}
               isWinner={g.status === "ACCEPTED"}
             />
           ))}

@@ -16,19 +16,26 @@ import { Spinner } from "@/components/ui/spinner";
 import { useRoom } from "@/features/room/room-provider";
 
 /**
- * Host-only match controls. Every action is a request — the server validates
- * that the caller is the host and owns all state transitions.
+ * Round controls, split by role. The MASTER can end the running round; the HOST
+ * starts the next one / restarts the match. The server validates both.
  */
-export function HostControls() {
-  const { room, me, busy, finishRound, startRound, restartMatch } = useRoom();
+export function RoundControls() {
+  const { room, me, isHost, isMaster, busy, finishRound, startRound, restartMatch } = useRoom();
   const [solvedBy, setSolvedBy] = useState<string>("");
 
   if (!room?.round) return null;
   const round = room.round;
-  const others = room.players.filter((p) => p.id !== me?.id);
 
-  // Round running -> the host can close it.
+  // Running round: only the master can close it (usually a guess does it, but
+  // they may also mark a verbal solve or just reveal).
   if (round.status === "ACTIVE") {
+    if (!isMaster) return null;
+    // Detectives who are still in the round are eligible "solvers".
+    const eliminated = new Set(
+      round.guesses.filter((g) => g.status === "REJECTED").map((g) => g.playerId),
+    );
+    const candidates = room.players.filter((p) => p.id !== me?.id && !eliminated.has(p.id));
+
     return (
       <Card size="sm">
         <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -38,7 +45,7 @@ export function HostControls() {
                 <SelectValue placeholder="Quem desvendou? (opcional)" />
               </SelectTrigger>
               <SelectContent>
-                {others.map((p) => (
+                {candidates.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.nickname}
                   </SelectItem>
@@ -61,7 +68,15 @@ export function HostControls() {
     );
   }
 
-  // Round over -> next round or restart the match.
+  // Round over: the host moves the match forward.
+  if (!isHost) {
+    return (
+      <p className="text-muted-foreground py-1 text-center text-sm">
+        Aguardando o anfitrião iniciar a próxima rodada.
+      </p>
+    );
+  }
+
   return (
     <Card size="sm">
       <CardContent className="flex flex-col gap-2 sm:flex-row sm:justify-end">

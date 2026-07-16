@@ -15,19 +15,20 @@ import { allow, forgetSocket } from "./rate-limit";
 import {
   buildRoomState,
   createRoom,
-  findHostId,
   joinOrResume,
   leaveRoom,
   setConnected,
   sweepRooms,
 } from "./rooms";
 import { resolveGuess, submitGuess } from "./guesses";
-import { answerQuestion, askQuestion } from "./questions";
+import { answerQuestion, askQuestion, passTurn } from "./questions";
+import { advanceTurn, getActiveRound } from "./round-utils";
 import {
   expireRound,
   findOverdueRounds,
   findPendingRounds,
   finishRound,
+  getActiveMasterId,
   getActiveRoundSecret,
   restartMatch,
   startRound,
@@ -63,21 +64,20 @@ async function broadcastState(io: RealtimeServer, roomId: string): Promise<void>
 }
 
 /**
- * Delivers the active round's answer to the room's host — and nobody else.
+ * Delivers the active round's secret (answer + pending guess texts) to that
+ * round's MASTER — and nobody else.
  *
- * SECURITY: this targets the host's own socket id (never a room), and is the
- * only path that ever puts the answer on the wire. Called on round start, when
- * the host (re)joins, and after a host transfer so the new host can narrate.
+ * SECURITY: targets the master's own socket id (never a room); this is the only
+ * path that ever puts the answer or a guess text on the wire. Called on round
+ * start, when the master (re)joins, and whenever a guess is submitted/resolved
+ * so the master's pending list stays current.
  */
-async function sendSecretToHost(io: RealtimeServer, roomId: string): Promise<void> {
-  // PERF: this used to call buildRoomState — the full snapshot (players, round,
-  // questions, guesses, leaderboard, history) just to read two fields. Now it
-  // asks only for the host id, which is all the decision needs.
-  const hostId = await findHostId(roomId);
-  if (!hostId) return;
+async function sendSecretToMaster(io: RealtimeServer, roomId: string): Promise<void> {
+  const masterId = await getActiveMasterId(roomId);
+  if (!masterId) return;
 
-  const socketId = playerSocket.get(hostId);
-  if (!socketId) return; // host is offline — nothing to deliver
+  const socketId = playerSocket.get(masterId);
+  if (!socketId) return; // master is offline — nothing to deliver
 
   // Returns null unless a round is ACTIVE: once it ends the solution becomes
   // public through `reveal`, so there is nothing private left to deliver.
@@ -185,10 +185,11 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         // PERF: joinOrResume already built this exact snapshot and nothing has
         // changed since, so broadcast it instead of rebuilding it.
         io.to(payload.room.id).emit("room:state", payload.room);
-        // A host rejoining (reload/reconnect) must get the answer back.
-        // Non-hosts never reach this branch.
-        const isHost = payload.room.players.some((p) => p.id === payload.playerId && p.isHost);
-        if (isHost) await sendSecretToHost(io, payload.room.id);
+        // The MASTER rejoining (reload/reconnect) must get the secret back.
+        // Nobody else does — sendSecretToMaster targets only the master's socket.
+        if (payload.room.round?.masterId === payload.playerId) {
+          await sendSecretToMaster(io, payload.room.id);
+        }
       } catch (error) {
         ack(toErrorAck(error));
       }
@@ -207,7 +208,8 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         scheduleRoundExpiry(io, roomId, expiresAt);
         ack({ ok: true, data: round });
         await broadcastState(io, roomId);
-        await sendSecretToHost(io, roomId);
+        // Hand the secret to whoever the rotation made master.
+        await sendSecretToMaster(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));
       }
@@ -220,7 +222,7 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
-        // Host-only. Ending the round makes the solution public to everyone.
+        // Master-only. Ending the round makes the solution public to everyone.
         const round = await finishRound(roomId, playerId, input);
         cancelRoundTimer(roomId);
         ack({ ok: true, data: round });
@@ -237,9 +239,25 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
+        // Enforces: your turn, no open question, not the master, not eliminated.
         const question = await askQuestion(roomId, playerId, input);
         ack({ ok: true, data: question });
         // Everyone sees the new question immediately.
+        await broadcastState(io, roomId);
+      } catch (error) {
+        ack(toErrorAck(error));
+      }
+    });
+
+    socket.on("turn:pass", async (ack) => {
+      const { playerId, roomId } = socket.data;
+      if (!playerId || !roomId) {
+        ack({ ok: false, error: RealtimeError.NOT_IN_ROOM });
+        return;
+      }
+      try {
+        await passTurn(roomId, playerId);
+        ack({ ok: true, data: null });
         await broadcastState(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));
@@ -253,7 +271,7 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
-        // Host-only, and only YES | NO | IRRELEVANT are accepted.
+        // Master-only; only YES | NO | IRRELEVANT; advances the turn.
         const question = await answerQuestion(roomId, playerId, input);
         ack({ ok: true, data: question });
         await broadcastState(io, roomId);
@@ -269,10 +287,12 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
-        // One shot per player per round — enforced by a unique index.
+        // One secret shot per player per round — enforced by a unique index.
         const guess = await submitGuess(roomId, playerId, input);
         ack({ ok: true, data: guess });
         await broadcastState(io, roomId);
+        // The master needs the new guess text in their pending list to judge it.
+        await sendSecretToMaster(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));
       }
@@ -285,7 +305,7 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
-        // Host-only judgement.
+        // Master-only judgement.
         const { guess, winnerId } = await resolveGuess(roomId, playerId, input);
 
         if (winnerId) {
@@ -293,10 +313,12 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
           await finishRound(roomId, playerId, { outcome: "SOLVED", solvedById: winnerId });
           cancelRoundTimer(roomId);
         }
-        // Rejected: the shot stays spent; the unique index blocks a retry.
+        // Rejected: guesser eliminated; the turn (if theirs) already advanced.
 
         ack({ ok: true, data: guess });
         await broadcastState(io, roomId);
+        // Refresh the master's pending list (this guess is no longer pending).
+        await sendSecretToMaster(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));
       }
@@ -325,17 +347,33 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         return;
       }
       try {
+        // Snapshot the round roles BEFORE the player is gone.
+        const activeBefore = await getActiveRound(roomId);
+        const wasMaster = activeBefore?.masterId === playerId;
+        const wasAsker = activeBefore?.currentAskerId === playerId;
+
         playerSocket.delete(playerId);
         await socket.leave(roomId);
         socket.data = {};
         const state = await leaveRoom(playerId);
-        if (state) {
-          io.to(roomId).emit("room:state", state);
-          // The host may have changed — the new host needs the answer to narrate.
-          await sendSecretToHost(io, roomId);
-        } else {
+        if (!state) {
           io.to(roomId).emit("room:closed", "empty");
+          ack({ ok: true, data: null });
+          return;
         }
+
+        if (wasMaster) {
+          // The narrator abandoned the round — end it (reveal) so the host can
+          // start a fresh one with the next master.
+          cancelRoundTimer(roomId);
+          await expireRound(roomId);
+        } else if (wasAsker) {
+          const active = await getActiveRound(roomId);
+          if (active) await advanceTurn(active, playerId);
+        }
+
+        await broadcastState(io, roomId);
+        await sendSecretToMaster(io, roomId);
         ack({ ok: true, data: null });
       } catch (error) {
         ack(toErrorAck(error));
@@ -350,7 +388,14 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
       if (playerSocket.get(playerId) !== socket.id) return;
       playerSocket.delete(playerId);
       const roomId = await setConnected(playerId, false);
-      if (roomId) await broadcastState(io, roomId);
+      if (!roomId) return;
+
+      // If the player who dropped had the turn, pass it on so the round doesn't
+      // stall waiting on someone who is gone. They rejoin the queue on reconnect.
+      const active = await getActiveRound(roomId);
+      if (active?.currentAskerId === playerId) await advanceTurn(active, playerId);
+
+      await broadcastState(io, roomId);
     });
   });
 }
@@ -378,8 +423,8 @@ export function startSweeper(io: RealtimeServer): NodeJS.Timeout {
       }
       for (const roomId of updatedRoomIds) {
         await broadcastState(io, roomId);
-        // A sweep may have transferred host; hand the answer to whoever holds it now.
-        await sendSecretToHost(io, roomId);
+        // Keep the master's private secret current after any sweep change.
+        await sendSecretToMaster(io, roomId);
       }
     } catch (error) {
       console.error("[realtime] sweep failed:", error);

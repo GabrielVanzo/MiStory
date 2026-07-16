@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { EyeIcon, EyeOffIcon, LockIcon, TimerIcon, UnlockIcon } from "lucide-react";
+import {
+  CheckIcon,
+  EyeIcon,
+  EyeOffIcon,
+  LockIcon,
+  TimerIcon,
+  TrophyIcon,
+  UnlockIcon,
+  XIcon,
+} from "lucide-react";
 
 import type { PublicRound, RoundSecret } from "@/lib/realtime/events";
 import { useCountdown } from "@/hooks/use-countdown";
@@ -11,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DIFFICULTY_LABEL,
   DIFFICULTY_TONE,
@@ -73,12 +83,58 @@ export function EnigmaCard({ round }: { round: PublicRound }) {
   );
 }
 
+/** The master judges a pending guess — the only place a guess text is shown. */
+function PendingGuessRow({
+  id,
+  authorName,
+  content,
+}: {
+  id: string;
+  authorName: string;
+  content: string;
+}) {
+  const { resolveGuess } = useRoom();
+  const [pending, setPending] = useState<"accept" | "reject" | null>(null);
+
+  async function judge(accept: boolean) {
+    setPending(accept ? "accept" : "reject");
+    await resolveGuess(id, accept);
+    setPending(null);
+  }
+
+  return (
+    <li className="bg-background/60 ring-border space-y-2 rounded-lg p-3 ring-1">
+      <p className="text-muted-foreground text-xs font-medium">
+        Chute de <span className="text-foreground">{authorName}</span>
+      </p>
+      <p className="text-sm text-pretty">{content}</p>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => judge(true)} disabled={pending !== null}>
+          {pending === "accept" ? <Spinner size="xs" /> : <CheckIcon />}
+          Aceitar (vence)
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => judge(false)}
+          disabled={pending !== null}
+        >
+          {pending === "reject" ? <Spinner size="xs" /> : <XIcon />}
+          Recusar (elimina)
+        </Button>
+      </div>
+    </li>
+  );
+}
+
 /**
- * HOST ONLY. Rendered from the `secret` the server delivered privately to this
- * socket — non-hosts never receive it, so there is nothing to render for them.
+ * MASTER ONLY. Rendered from the `secret` the server delivered privately to this
+ * socket — nobody else receives it. Holds the answer and the pending guesses to
+ * judge (the only place a guess text is ever shown).
  */
-export function HostSecretPanel({ secret }: { secret: RoundSecret }) {
+export function MasterSecretPanel({ secret }: { secret: RoundSecret }) {
   const [revealed, setRevealed] = useState(false);
+  const pending = secret.pendingGuesses;
 
   return (
     <Card className="ring-warning/25 bg-warning/5">
@@ -86,7 +142,7 @@ export function HostSecretPanel({ secret }: { secret: RoundSecret }) {
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-warning flex items-center gap-2 text-sm">
             <LockIcon className="size-3.5" />
-            Solução — visível apenas para você
+            Você é o mestre — visível apenas para você
           </CardTitle>
           <Button
             variant="ghost"
@@ -95,34 +151,53 @@ export function HostSecretPanel({ secret }: { secret: RoundSecret }) {
             aria-expanded={revealed}
           >
             {revealed ? <EyeOffIcon /> : <EyeIcon />}
-            {revealed ? "Ocultar" : "Revelar"}
+            {revealed ? "Ocultar" : "Ver solução"}
           </Button>
         </div>
       </CardHeader>
 
-      {revealed ? (
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-              Resposta
-            </p>
-            <p className="text-pretty">{secret.answer}</p>
+      <CardContent className="space-y-4">
+        {revealed ? (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Resposta
+              </p>
+              <p className="text-pretty">{secret.answer}</p>
+            </div>
+            <Separator />
+            <div className="space-y-1">
+              <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Explicação
+              </p>
+              <p className="text-muted-foreground text-sm text-pretty">{secret.explanation}</p>
+            </div>
           </div>
-          <Separator />
-          <div className="space-y-1">
-            <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-              Explicação
-            </p>
-            <p className="text-muted-foreground text-sm text-pretty">{secret.explanation}</p>
-          </div>
-        </CardContent>
-      ) : (
-        <CardContent>
+        ) : (
           <p className="text-muted-foreground text-sm">
-            Você é o mestre desta rodada. Revele para consultar a resposta e conduzir o mistério.
+            Responda às perguntas e julgue os chutes. Ninguém mais vê esta caixa.
           </p>
-        </CardContent>
-      )}
+        )}
+
+        {pending.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-warning flex items-center gap-1.5 text-xs font-medium">
+              <TrophyIcon className="size-3.5" /> {pending.length}{" "}
+              {pending.length === 1 ? "chute para julgar" : "chutes para julgar"}
+            </p>
+            <ul className="space-y-2">
+              {pending.map((g) => (
+                <PendingGuessRow
+                  key={g.id}
+                  id={g.id}
+                  authorName={g.authorName}
+                  content={g.content}
+                />
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </CardContent>
     </Card>
   );
 }
@@ -153,6 +228,15 @@ export function RoundRevealPanel({ round }: { round: PublicRound }) {
         ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
+        {round.reveal.winnerGuess ? (
+          <div className="space-y-1">
+            <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+              Chute vencedor
+            </p>
+            <p className="text-pretty italic">“{round.reveal.winnerGuess}”</p>
+            <Separator className="mt-3" />
+          </div>
+        ) : null}
         <div className="space-y-1">
           <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
             Resposta

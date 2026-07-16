@@ -4,16 +4,20 @@ import { RealtimeError } from "../../lib/realtime/events";
 import { asGuessStatus } from "./db-enums";
 import { isUniqueViolation, RoomError } from "./errors";
 import { asId, asText } from "./input";
-import { requireActiveRound } from "./round-utils";
+import { advanceTurn, requireActiveRound } from "./round-utils";
 import { awardWrongGuess } from "./scores";
 
 const GUESS_MAX = 300;
 
-const GUESS_SELECT = {
+/**
+ * PUBLIC select — no `content`. A guess text is secret: it reaches only the
+ * master (via the round secret) and, if accepted, the reveal. Loading it here
+ * would risk leaking it into a broadcast.
+ */
+const GUESS_PUBLIC_SELECT = {
   id: true,
   playerId: true,
   authorName: true,
-  content: true,
   status: true,
   createdAt: true,
   resolvedAt: true,
@@ -23,7 +27,6 @@ type GuessRow = {
   id: string;
   playerId: string | null;
   authorName: string;
-  content: string;
   status: string;
   createdAt: Date;
   resolvedAt: Date | null;
@@ -34,27 +37,30 @@ function toGuessDTO(g: GuessRow): GuessDTO {
     id: g.id,
     playerId: g.playerId,
     authorName: g.authorName,
-    content: g.content,
     status: asGuessStatus(g.status),
     createdAt: g.createdAt.toISOString(),
     resolvedAt: g.resolvedAt?.toISOString() ?? null,
   };
 }
 
-/** The round's guesses, oldest first. Public — everyone hears the shot. */
+/**
+ * The round's guesses, oldest first. Public — but only WHO guessed and how it
+ * went, never the text.
+ */
 export async function getGuesses(roundId: string): Promise<GuessDTO[]> {
   const rows = await prisma.guess.findMany({
     where: { roundId },
     orderBy: { createdAt: "asc" },
-    select: GUESS_SELECT,
+    select: GUESS_PUBLIC_SELECT,
   });
   return rows.map(toGuessDTO);
 }
 
 /**
- * A detective's single shot at the solution.
- * The host knows the answer, so they cannot guess. One guess per player per
- * round — enforced by a unique index, so even a race cannot buy a second shot.
+ * A detective's single, SECRET shot at the solution.
+ * The master narrates, so they cannot guess. One guess per player per round —
+ * enforced by a unique index, so even a race cannot buy a second shot. The text
+ * goes to nobody here; the master reads it via the round secret.
  */
 export async function submitGuess(
   roomId: string,
@@ -66,12 +72,12 @@ export async function submitGuess(
 
   const player = await prisma.player.findUnique({
     where: { id: playerId },
-    select: { id: true, roomId: true, isHost: true, nickname: true },
+    select: { id: true, roomId: true, nickname: true },
   });
   if (!player || player.roomId !== roomId) throw new RoomError(RealtimeError.NOT_IN_ROOM);
-  if (player.isHost) throw new RoomError(RealtimeError.HOST_CANNOT_GUESS);
 
   const round = await requireActiveRound(roomId);
+  if (round.masterId === playerId) throw new RoomError(RealtimeError.MASTER_CANNOT_GUESS);
 
   // Fast path: a second attempt is normal user behaviour, not an error — check
   // first so we don't make Prisma log a constraint violation every time. The
@@ -91,7 +97,7 @@ export async function submitGuess(
         content,
         status: "PENDING",
       },
-      select: GUESS_SELECT,
+      select: GUESS_PUBLIC_SELECT,
     })
     .catch((error: unknown) => {
       // The unique index fired: this player already spent their shot.
@@ -109,23 +115,18 @@ export interface ResolvedGuess {
 }
 
 /**
- * Host-only judgement.
- * - accept  -> the guess wins; the caller ends the round with this winner.
- * - reject  -> the shot is spent; the unique index blocks any retry.
+ * Master-only judgement.
+ * - accept -> the guess wins; the caller ends the round with this winner.
+ * - reject -> the guesser is ELIMINATED (their shot is spent AND they drop out
+ *   of the round's turn queue). Costs a point; if it was their turn, it moves on.
  */
 export async function resolveGuess(
   roomId: string,
   playerId: string,
   input: ResolveGuessInput,
 ): Promise<ResolvedGuess> {
-  const host = await prisma.player.findUnique({
-    where: { id: playerId },
-    select: { id: true, roomId: true, isHost: true },
-  });
-  if (!host || host.roomId !== roomId) throw new RoomError(RealtimeError.NOT_IN_ROOM);
-  if (!host.isHost) throw new RoomError(RealtimeError.FORBIDDEN);
-
   const round = await requireActiveRound(roomId);
+  if (round.masterId !== playerId) throw new RoomError(RealtimeError.FORBIDDEN);
 
   const guess = await prisma.guess.findFirst({
     // asId: a raw value here would let a client inject a Prisma operator.
@@ -139,13 +140,16 @@ export async function resolveGuess(
   const updated = await prisma.guess.update({
     where: { id: guess.id },
     data: { status: accept ? "ACCEPTED" : "REJECTED", resolvedAt: new Date() },
-    select: GUESS_SELECT,
+    select: GUESS_PUBLIC_SELECT,
   });
 
-  // A wrong shot costs a point. The solve is awarded by the round lifecycle
-  // (see rounds.ts), so accepting is scored exactly once, there.
   if (!accept && guess.playerId) {
+    // A wrong shot costs a point (the solve is scored by the round lifecycle).
     await awardWrongGuess(roomId, round.id, guess.playerId);
+    // The guesser is now eliminated — if it was their turn, pass it on.
+    if (round.currentAskerId === guess.playerId) {
+      await advanceTurn(round, guess.playerId);
+    }
   }
 
   return { guess: toGuessDTO(updated), winnerId: accept ? guess.playerId : null };

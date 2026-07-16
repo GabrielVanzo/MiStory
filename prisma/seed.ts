@@ -35,6 +35,8 @@ async function main(): Promise<void> {
         solution: enigma.answer,
         explanation: enigma.explanation,
         difficulty: enigma.level,
+        // Re-publish in case it had been retired before and came back.
+        isPublished: true,
       },
     });
 
@@ -42,8 +44,22 @@ async function main(): Promise<void> {
     else created++;
   }
 
+  // Retire enigmas that were removed/renamed in the file (e.g. a broken puzzle
+  // replaced by a new one). We DON'T delete: a past round may reference it via
+  // a Restrict FK. Setting isPublished=false just keeps it out of new draws
+  // while its history survives.
+  const slugs = ENIGMAS.map((enigma) => enigma.id);
+  const retired = await prisma.enigma.updateMany({
+    where: { slug: { notIn: slugs }, isPublished: true },
+    data: { isPublished: false },
+  });
+
   const total = await prisma.enigma.count();
-  console.log(`[seed] enigmas: ${created} created, ${updated} updated (${total} total)`);
+  const published = await prisma.enigma.count({ where: { isPublished: true } });
+  console.log(
+    `[seed] enigmas: ${created} created, ${updated} updated, ${retired.count} retired ` +
+      `(${published} published / ${total} total)`,
+  );
 }
 
 main()

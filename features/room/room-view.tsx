@@ -12,6 +12,7 @@ import {
   RotateCcwIcon,
   SparklesIcon,
   UsersIcon,
+  WandIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,9 +28,9 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EnigmaCard, HostSecretPanel, RoundRevealPanel } from "@/features/room/enigma-card";
+import { EnigmaCard, MasterSecretPanel, RoundRevealPanel } from "@/features/room/enigma-card";
 import { GuessButton, GuessPanel } from "@/features/room/guess-panel";
-import { HostControls } from "@/features/room/host-controls";
+import { RoundControls } from "@/features/room/host-controls";
 import { PlayerAvatar } from "@/features/room/player-avatar";
 import { Leaderboard, RoomHistory } from "@/features/room/leaderboard";
 import { AskBar, QuestionFeed } from "@/features/room/question-feed";
@@ -87,7 +88,18 @@ function JoinGate() {
   );
 }
 
-function PlayerRow({ player, isMe }: { player: PlayerDTO; isMe: boolean }) {
+function PlayerRow({
+  player,
+  isMe,
+  isMaster,
+  isEliminated,
+}: {
+  player: PlayerDTO;
+  isMe: boolean;
+  isMaster: boolean;
+  isEliminated: boolean;
+}) {
+  const role = player.isHost ? "Anfitrião" : "Detetive";
   return (
     <li className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2 transition-colors">
       <span className="relative">
@@ -102,12 +114,16 @@ function PlayerRow({ player, isMe }: { player: PlayerDTO; isMe: boolean }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-medium">
-          {player.nickname}
+          <span className={isEliminated ? "text-muted-foreground line-through" : undefined}>
+            {player.nickname}
+          </span>
           {isMe ? <span className="text-muted-foreground text-xs">(você)</span> : null}
           {player.isHost ? <CrownIcon className="text-warning size-3.5" /> : null}
+          {isMaster ? <WandIcon className="text-primary size-3.5" /> : null}
         </p>
         <p className="text-muted-foreground text-xs">
-          {player.isHost ? "Anfitrião" : "Detetive"} · {player.isConnected ? "online" : "offline"}
+          {isMaster ? "Mestre" : isEliminated ? "Fora da rodada" : role} ·{" "}
+          {player.isConnected ? "online" : "offline"}
         </p>
       </div>
     </li>
@@ -238,11 +254,12 @@ export function RoomView() {
           {room.round ? (
             <>
               <EnigmaCard round={room.round} />
-              {/* Rendered only for the host — `secret` is null for everyone else. */}
-              {secret ? <HostSecretPanel secret={secret} /> : null}
+              {/* Rendered only for the master — `secret` is null for everyone else. */}
+              {secret ? <MasterSecretPanel secret={secret} /> : null}
               {/* Public once the server ends the round. */}
               <RoundRevealPanel round={room.round} />
-              {isHost ? <HostControls /> : null}
+              {/* Self-gates: master ends the round, host starts the next one. */}
+              <RoundControls />
               <GuessPanel round={room.round} />
               <QuestionFeed round={room.round} />
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
@@ -272,7 +289,7 @@ export function RoomView() {
                       Sortear enigma e iniciar
                     </Button>
                     <p className="text-muted-foreground text-xs">
-                      Você será o mestre e verá a resposta.
+                      O mestre é sorteado por ordem de entrada e alterna a cada rodada.
                     </p>
                   </div>
                 ) : (
@@ -308,7 +325,17 @@ export function RoomView() {
                   </div>
                   <ul className="space-y-1">
                     {room.players.map((player) => (
-                      <PlayerRow key={player.id} player={player} isMe={player.id === me?.id} />
+                      <PlayerRow
+                        key={player.id}
+                        player={player}
+                        isMe={player.id === me?.id}
+                        isMaster={room.round?.masterId === player.id}
+                        isEliminated={Boolean(
+                          room.round?.guesses.some(
+                            (g) => g.playerId === player.id && g.status === "REJECTED",
+                          ),
+                        )}
+                      />
                     ))}
                   </ul>
                 </TabsContent>

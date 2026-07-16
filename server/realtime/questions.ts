@@ -5,7 +5,12 @@ import { isAnswerValue } from "../../types/game";
 import { asAnswerValue } from "./db-enums";
 import { RoomError } from "./errors";
 import { asId, asText } from "./input";
-import { requireActiveRound } from "./round-utils";
+import {
+  advanceTurn,
+  getEliminatedIds,
+  hasPendingQuestion,
+  requireActiveRound,
+} from "./round-utils";
 
 const QUESTION_MAX = 200;
 
@@ -51,8 +56,9 @@ export async function getQuestions(roundId: string): Promise<QuestionDTO[]> {
 }
 
 /**
- * Ask a yes/no question in the room's active round.
- * The host narrates and already knows the answer, so they cannot ask.
+ * Ask a yes/no question — only the detective whose TURN it is, and only when no
+ * question is still awaiting the master (one open question at a time keeps the
+ * feed orderly). The master narrates, so they cannot ask.
  */
 export async function askQuestion(
   roomId: string,
@@ -64,18 +70,25 @@ export async function askQuestion(
 
   const player = await prisma.player.findUnique({
     where: { id: playerId },
-    select: { id: true, roomId: true, isHost: true, nickname: true },
+    select: { id: true, roomId: true, nickname: true },
   });
   if (!player || player.roomId !== roomId) throw new RoomError(RealtimeError.NOT_IN_ROOM);
-  if (player.isHost) throw new RoomError(RealtimeError.HOST_CANNOT_ASK);
 
   const round = await requireActiveRound(roomId);
+  if (round.masterId === playerId) throw new RoomError(RealtimeError.MASTER_CANNOT_ASK);
+
+  const eliminated = await getEliminatedIds(round.id);
+  if (eliminated.has(playerId)) throw new RoomError(RealtimeError.ELIMINATED);
+
+  if (round.currentAskerId !== playerId) throw new RoomError(RealtimeError.NOT_YOUR_TURN);
+  // While a question is still open the turn has not moved on — no double-asking.
+  if (await hasPendingQuestion(round.id)) throw new RoomError(RealtimeError.NOT_YOUR_TURN);
 
   const created = await prisma.question.create({
     data: {
       roundId: round.id,
       playerId: player.id,
-      // Snapshot: the log must stay readable even if this player leaves later.
+      // Snapshot: the log stays readable even if this player leaves later.
       authorName: player.nickname,
       content,
     },
@@ -86,8 +99,9 @@ export async function askQuestion(
 }
 
 /**
- * Host-only reply. Accepts exactly YES | NO | IRRELEVANT; anything else is
- * rejected. Re-answering overwrites, so a misclick can be corrected.
+ * Master-only reply. Accepts exactly YES | NO | IRRELEVANT. Answering the open
+ * question moves the turn to the next detective. Re-answering an already
+ * answered question is not allowed (it would not advance the turn twice).
  */
 export async function answerQuestion(
   roomId: string,
@@ -97,28 +111,27 @@ export async function answerQuestion(
   const value = typeof input?.value === "string" ? input.value : "";
   if (!isAnswerValue(value)) throw new RoomError(RealtimeError.INVALID_INPUT);
 
-  const host = await prisma.player.findUnique({
-    where: { id: playerId },
-    select: { id: true, roomId: true, isHost: true },
-  });
-  if (!host || host.roomId !== roomId) throw new RoomError(RealtimeError.NOT_IN_ROOM);
-  if (!host.isHost) throw new RoomError(RealtimeError.FORBIDDEN);
-
   const round = await requireActiveRound(roomId);
+  if (round.masterId !== playerId) throw new RoomError(RealtimeError.FORBIDDEN);
 
-  // The question must belong to this room's active round.
   const question = await prisma.question.findFirst({
-    // asId: a raw value here would let a client inject a Prisma operator.
     where: { id: asId(input?.questionId), roundId: round.id },
-    select: { id: true },
+    select: { id: true, playerId: true, answer: { select: { id: true } } },
   });
   if (!question) throw new RoomError(RealtimeError.QUESTION_NOT_FOUND);
 
+  const wasOpen = question.answer === null;
+
   await prisma.answer.upsert({
     where: { questionId: question.id },
-    create: { questionId: question.id, authorId: host.id, value },
-    update: { value, authorId: host.id },
+    create: { questionId: question.id, authorId: playerId, value },
+    update: { value, authorId: playerId },
   });
+
+  // Answering the OPEN question hands the turn to the next detective.
+  if (wasOpen) {
+    await advanceTurn(round, question.playerId);
+  }
 
   const updated = await prisma.question.findUnique({
     where: { id: question.id },
@@ -126,4 +139,15 @@ export async function answerQuestion(
   });
   if (!updated) throw new RoomError(RealtimeError.INTERNAL);
   return toQuestionDTO(updated);
+}
+
+/**
+ * The detective whose turn it is skips without asking, passing it on.
+ * Not allowed while a question is still open (that turn is already spent).
+ */
+export async function passTurn(roomId: string, playerId: string): Promise<void> {
+  const round = await requireActiveRound(roomId);
+  if (round.currentAskerId !== playerId) throw new RoomError(RealtimeError.NOT_YOUR_TURN);
+  if (await hasPendingQuestion(round.id)) throw new RoomError(RealtimeError.NOT_YOUR_TURN);
+  await advanceTurn(round, playerId);
 }

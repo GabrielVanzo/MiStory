@@ -1,29 +1,35 @@
 import { prisma } from "../../lib/prisma";
-import type { FinishRoundInput, PublicRound, RoundSecret } from "../../lib/realtime/events";
+import type {
+  FinishRoundInput,
+  PublicRound,
+  RoundReveal,
+  RoundSecret,
+} from "../../lib/realtime/events";
 import { RealtimeError } from "../../lib/realtime/events";
 import { isFinishedRoundStatus } from "../../types/game";
+import { REALTIME_CONFIG } from "./config";
 import { asDifficulty, asRoundStatus } from "./db-enums";
 import { RoomError } from "./errors";
-import { asId } from "./input";
 import { getGuesses } from "./guesses";
+import { asId } from "./input";
 import { getQuestions } from "./questions";
+import { firstAsker } from "./round-utils";
 import { awardSolve } from "./scores";
-import { REALTIME_CONFIG } from "./config";
 
 /**
  * PUBLIC round projection.
  *
- * SECURITY: this `select` deliberately omits `solution` and `explanation`. The
- * secrets are never loaded on the public path, so they cannot leak into a
- * broadcast by accident. They reach the wire only through `getRoundSecret`
- * (host-only, while the round runs) or `buildReveal` (after the round ends,
- * when the solution is intentionally made public).
+ * SECURITY: this `select` never loads `solution`/`explanation` (the enigma
+ * secret) nor guess `content` (the chute secret). Those reach the wire only
+ * through `getRoundSecret` (master-only, while the round runs) or `buildReveal`
+ * (after the round ends, when the solution is intentionally public).
  */
 const PUBLIC_ROUND_SELECT = {
   id: true,
   number: true,
   status: true,
   masterId: true,
+  currentAskerId: true,
   solvedById: true,
   expiresAt: true,
   enigma: {
@@ -31,14 +37,22 @@ const PUBLIC_ROUND_SELECT = {
   },
 } as const;
 
-/** Loads the solution for a finished round, to be shown to everyone. */
-async function buildReveal(roundId: string) {
+/** Loads the solution (and the winning guess) for a finished round. Public. */
+async function buildReveal(roundId: string): Promise<RoundReveal | null> {
   const round = await prisma.round.findUnique({
     where: { id: roundId },
-    select: { enigma: { select: { solution: true, explanation: true } } },
+    select: {
+      enigma: { select: { solution: true, explanation: true } },
+      // Only the ACCEPTED guess is ever revealed — rejected ones stay secret.
+      guesses: { where: { status: "ACCEPTED" }, select: { content: true }, take: 1 },
+    },
   });
   if (!round) return null;
-  return { answer: round.enigma.solution, explanation: round.enigma.explanation };
+  return {
+    answer: round.enigma.solution,
+    explanation: round.enigma.explanation,
+    winnerGuess: round.guesses[0]?.content ?? null,
+  };
 }
 
 /**
@@ -60,8 +74,8 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
     number: round.number,
     status: asRoundStatus(round.status),
     masterId: round.masterId,
+    currentAskerId: round.currentAskerId,
     solvedById: round.solvedById,
-    // A finished round has no deadline left to count down to.
     expiresAt: finished ? null : (round.expiresAt?.toISOString() ?? null),
     enigma: { ...round.enigma, difficulty: asDifficulty(round.enigma.difficulty) },
     reveal: finished ? await buildReveal(round.id) : null,
@@ -70,17 +84,29 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
   };
 }
 
-/** SECRET — resolve the answer/explanation for a round. Host delivery only. */
+/**
+ * SECRET — the enigma solution PLUS the texts of guesses awaiting judgement.
+ * Master delivery only.
+ */
 async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
   const round = await prisma.round.findUnique({
     where: { id: roundId },
-    select: { id: true, enigma: { select: { solution: true, explanation: true } } },
+    select: {
+      id: true,
+      enigma: { select: { solution: true, explanation: true } },
+      guesses: {
+        where: { status: "PENDING" },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, authorName: true, content: true },
+      },
+    },
   });
   if (!round) return null;
   return {
     roundId: round.id,
     answer: round.enigma.solution,
     explanation: round.enigma.explanation,
+    pendingGuesses: round.guesses,
   };
 }
 
@@ -94,6 +120,7 @@ export async function getActiveRoundSecret(roomId: string): Promise<RoundSecret 
   return round ? getRoundSecret(round.id) : null;
 }
 
+/** Host = room owner. Controls start/restart, but is a normal player otherwise. */
 async function requireHost(roomId: string, requesterId: string): Promise<void> {
   const requester = await prisma.player.findUnique({
     where: { id: requesterId },
@@ -101,6 +128,57 @@ async function requireHost(roomId: string, requesterId: string): Promise<void> {
   });
   if (!requester || requester.roomId !== roomId) throw new RoomError(RealtimeError.NOT_IN_ROOM);
   if (!requester.isHost) throw new RoomError(RealtimeError.FORBIDDEN);
+}
+
+/** Master = the narrator of the ACTIVE round (rotates each round). */
+async function requireMaster(roomId: string, requesterId: string): Promise<string> {
+  const round = await prisma.round.findFirst({
+    where: { roomId, status: "ACTIVE" },
+    orderBy: { number: "desc" },
+    select: { id: true, masterId: true },
+  });
+  if (!round) throw new RoomError(RealtimeError.NO_ACTIVE_ROUND);
+  if (round.masterId !== requesterId) throw new RoomError(RealtimeError.FORBIDDEN);
+  return round.id;
+}
+
+/** The master's id for the ACTIVE round, if any (used to deliver the secret). */
+export async function getActiveMasterId(roomId: string): Promise<string | null> {
+  const round = await prisma.round.findFirst({
+    where: { roomId, status: "ACTIVE" },
+    orderBy: { number: "desc" },
+    select: { masterId: true },
+  });
+  return round?.masterId ?? null;
+}
+
+/**
+ * The next master, walking join order in a circle from the previous round's
+ * master. Skips disconnected players. A round needs a master AND at least one
+ * detective, so at least two players must be connected.
+ */
+async function pickNextMaster(roomId: string): Promise<string> {
+  const players = await prisma.player.findMany({
+    where: { roomId },
+    orderBy: { joinedAt: "asc" },
+    select: { id: true, isConnected: true },
+  });
+  const connectedCount = players.filter((p) => p.isConnected).length;
+  if (connectedCount < 2) throw new RoomError(RealtimeError.NOT_ENOUGH_PLAYERS);
+
+  const last = await prisma.round.findFirst({
+    where: { roomId },
+    orderBy: { number: "desc" },
+    select: { masterId: true },
+  });
+  const startIndex = last?.masterId ? players.findIndex((p) => p.id === last.masterId) : -1;
+
+  for (let step = 1; step <= players.length; step++) {
+    const player = players[(startIndex + step + players.length) % players.length];
+    if (player.isConnected) return player.id;
+  }
+  // Unreachable given connectedCount >= 2, but keeps the type honest.
+  throw new RoomError(RealtimeError.NOT_ENOUGH_PLAYERS);
 }
 
 /** Picks a random published enigma, preferring ones not yet played in the room. */
@@ -129,9 +207,9 @@ export interface StartedRound {
 }
 
 /**
- * Starts a round (the first one, or the next after the previous finished).
- * Host-only. The host becomes the round's master and the server — not the
- * client — fixes the deadline.
+ * Starts a round. Host-only trigger, but the MASTER rotates automatically to
+ * the next player in join order. The server — not the client — fixes both the
+ * deadline and the first detective's turn.
  */
 export async function startRound(roomId: string, requesterId: string): Promise<StartedRound> {
   await requireHost(roomId, requesterId);
@@ -142,6 +220,7 @@ export async function startRound(roomId: string, requesterId: string): Promise<S
   });
   if (active) throw new RoomError(RealtimeError.ROUND_IN_PROGRESS);
 
+  const masterId = await pickNextMaster(roomId);
   const enigmaId = await pickRandomEnigmaId(roomId);
   const last = await prisma.round.findFirst({
     where: { roomId },
@@ -153,18 +232,14 @@ export async function startRound(roomId: string, requesterId: string): Promise<S
   const startedAt = new Date();
   const expiresAt = new Date(startedAt.getTime() + REALTIME_CONFIG.roundDurationMs);
 
-  await prisma.round.create({
-    data: {
-      roomId,
-      enigmaId,
-      masterId: requesterId,
-      number,
-      status: "ACTIVE",
-      startedAt,
-      expiresAt,
-    },
-    select: { id: true },
+  const created = await prisma.round.create({
+    data: { roomId, enigmaId, masterId, number, status: "ACTIVE", startedAt, expiresAt },
+    select: { id: true, roomId: true, masterId: true, currentAskerId: true },
   });
+
+  // First turn goes to the first eligible detective (nobody is eliminated yet).
+  const asker = await firstAsker(created);
+  await prisma.round.update({ where: { id: created.id }, data: { currentAskerId: asker } });
 
   await prisma.room.update({
     where: { id: roomId },
@@ -178,8 +253,8 @@ export async function startRound(roomId: string, requesterId: string): Promise<S
 
 /**
  * Ends the ACTIVE round with the given status and moves the room to FINISHED.
- * Shared by the host action and the server-side timer. Returns null when there
- * is nothing active to end (already finished / raced).
+ * Shared by the master action and the server-side timer. Returns null when
+ * there is nothing active to end (already finished / raced).
  */
 async function endActiveRound(
   roomId: string,
@@ -195,12 +270,12 @@ async function endActiveRound(
 
   await prisma.round.update({
     where: { id: active.id },
-    data: { status, endedAt: new Date(), solvedById: solvedById ?? null },
+    data: { status, endedAt: new Date(), solvedById: solvedById ?? null, currentAskerId: null },
   });
   await prisma.room.update({ where: { id: roomId }, data: { status: "FINISHED" } });
 
-  // Scoring happens here — the one place a round can transition to finished,
-  // and only from ACTIVE, so the winner is awarded exactly once.
+  // Scoring happens here — the one place a round transitions to finished, and
+  // only from ACTIVE, so the winner is awarded exactly once.
   if (status === "SOLVED" && solvedById) {
     await awardSolve(roomId, active.id, solvedById);
   }
@@ -208,13 +283,13 @@ async function endActiveRound(
   return getPublicRound(roomId);
 }
 
-/** Host-only manual finish. Reveals the solution to the whole room. */
+/** Master-only manual finish. Reveals the solution to the whole room. */
 export async function finishRound(
   roomId: string,
   requesterId: string,
   input: FinishRoundInput,
 ): Promise<PublicRound> {
-  await requireHost(roomId, requesterId);
+  await requireMaster(roomId, requesterId);
 
   const outcome = input?.outcome === "SOLVED" ? "SOLVED" : "REVEALED";
 

@@ -18,5 +18,5 @@ export const REALTIME_CONFIG = {
   playerTtlMs: envMs(process.env.PLAYER_TTL_MS, 120_000),
   roomTtlMs: envMs(process.env.ROOM_TTL_MS, 120_000),
   sweepIntervalMs: envMs(process.env.SWEEP_INTERVAL_MS, 15_000),
-  roundDurationMs: envMs(process.env.ROUND_DURATION_MS, 600_000),
+  roundDurationMs: envMs(process.env.ROUND_DURATION_MS, 900_000), // 15 min
 };

@@ -23,7 +23,7 @@ const NOTIFY: Record<RoomEvent["tone"], (title: string, opts?: { description?: s
  * result to the toaster and remembers the previous snapshot.
  */
 export function useRoomEvents(): void {
-  const { room, me, isHost } = useRoom();
+  const { room, me } = useRoom();
   const previousRef = useRef<RoomState | null>(null);
   const myId = me?.id ?? null;
 
@@ -31,11 +31,11 @@ export function useRoomEvents(): void {
     const previous = previousRef.current;
     previousRef.current = room;
 
-    for (const event of diffRoomEvents(previous, room, myId, isHost)) {
+    for (const event of diffRoomEvents(previous, room, myId)) {
       NOTIFY[event.tone](
         event.title,
         event.description ? { description: event.description } : undefined,
       );
     }
-  }, [room, myId, isHost]);
+  }, [room, myId]);
 }

@@ -137,9 +137,11 @@ model Round {
   solvedById String?
 
   /// 1-based position within the room.
-  number Int
+  number         Int
   /// Round state — one of: WAITING | ACTIVE | SOLVED | ABANDONED (types/game.ts).
-  status String @default("WAITING")
+  status         String  @default("WAITING")
+  /// Whose turn it is to ask (the detective queue pointer). Null = nobody's turn.
+  currentAskerId String?
 
   room     Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
   enigma   Enigma  @relation(fields: [enigmaId], references: [id])

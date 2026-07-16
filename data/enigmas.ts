@@ -184,15 +184,15 @@ export const ENIGMAS: EnigmaSeed[] = [
       "Do ponto de vista dele, o trabalho foi impecável — só que invertido. O navio contava com a luz exatamente quando ela não estava lá.",
   },
   {
-    id: "a-porta-trancada-por-dentro",
+    id: "o-gosto-da-agua",
     level: "HARD",
-    title: "Trancada por dentro",
+    title: "O gosto da água",
     intro:
-      "Uma mulher é encontrada morta em um quarto trancado por dentro, com a chave ainda na fechadura. A janela está lacrada e não há outra entrada.",
+      "Os moradores de um prédio antigo reclamam há dias que a água está com um gosto adocicado e estranho. Um funcionário sobe até o telhado, abre a caixa d'água e entende tudo na hora.",
     answer:
-      "Ela trancou a porta para se proteger de alguém que já estava dentro do quarto — escondido.",
+      "Havia um corpo em decomposição dentro da caixa d'água. A pessoa caíra ali dentro e não conseguira sair.",
     explanation:
-      "A tranca não serviu para excluir o perigo, e sim para prendê-la com ele. O culpado saiu depois, girando a chave de dentro e deixando o quarto pela porta.",
+      "Toda a água do prédio passava pelo corpo antes de chegar às torneiras. O gosto estranho era a única pista — sentida muito antes de alguém pensar em olhar lá em cima.",
   },
   {
     id: "o-anel-no-lixo",
@@ -226,15 +226,15 @@ export const ENIGMAS: EnigmaSeed[] = [
       "A cadeira caiu com o movimento súbito, não com uma luta. A ausência de qualquer outra desordem é justamente o que descarta violência.",
   },
   {
-    id: "o-remedio-intacto",
+    id: "o-desconhecido-no-velorio",
     level: "HARD",
-    title: "O remédio intacto",
+    title: "O desconhecido no velório",
     intro:
-      "Um homem morre de uma doença perfeitamente tratável. Ao lado da cama, o vidro de remédio está cheio e ele sabia exatamente para que servia.",
+      "No velório da própria mãe, uma mulher se apaixona à primeira vista por um homem que nunca tinha visto. Ele vai embora sem deixar nome nem contato. Dias depois, ela assassina a própria irmã.",
     answer:
-      "Ele era daltônico e tomou, por engano, os comprimidos de outro vidro idêntico na cor errada.",
+      "Ela imaginou que o homem misterioso só aparecia em ocasiões de família como aquela. Matando a irmã, garantiria outro velório — e uma nova chance de reencontrá-lo.",
     explanation:
-      "O remédio certo continua cheio porque ele nunca chegou a abri-lo. A confiança na própria percepção foi o erro fatal.",
+      "A lógica é fria e retorcida: para ela, um segundo velório era a única forma de repetir o encontro. O crime não tem a ver com a irmã, e sim com o desconhecido.",
   },
   {
     id: "a-foto-rasgada",
@@ -290,15 +290,15 @@ export const ENIGMAS: EnigmaSeed[] = [
       "O destino nunca foi o ponto. O objetivo era o percurso — algo invisível para quem assume que todo passageiro quer chegar a algum lugar.",
   },
   {
-    id: "as-duas-tacas",
+    id: "o-palito-mais-curto",
     level: "HARD",
-    title: "As duas taças",
+    title: "O palito mais curto",
     intro:
-      "Duas taças idênticas estão sobre a mesa, ambas com a mesma bebida. Um homem escolhe uma delas, bebe e morre. A escolha foi dele.",
+      "Um homem é encontrado morto no meio do deserto, sem roupa, com um palito de fósforo quebrado na mão. Não há pegadas nem veículo em quilômetros.",
     answer:
-      "O veneno estava na borda de apenas uma taça, aplicado por quem sabia que ele sempre girava a taça antes de beber.",
+      "Ele estava num balão de ar quente que perdia altitude. Para aliviar o peso, os passageiros jogaram fora tudo — até as roupas — e ainda assim não bastou. Sortearam com palitos quem saltaria, e ele tirou o mais curto.",
     explanation:
-      "A bebida era inofensiva nas duas. A morte dependia de um hábito pessoal previsível, não da sorte.",
+      "A ausência de pegadas e de veículo se explica porque ele caiu do céu, não chegou por terra. O palito é o registro do sorteio que selou sua sorte.",
   },
   {
     id: "o-homem-que-parou-de-comer",
