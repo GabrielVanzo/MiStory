@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for black-stories-realtime on 2026-07-15T17:49:13-03:00
+# fly.toml — MiStory realtime (Socket.IO) server.
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'black-stories-realtime'
+app = 'mistory-realtime'
 primary_region = 'gru'
 
 [build]
@@ -14,7 +14,7 @@ primary_region = 'gru'
   PORT = '3001'
 
 [[mounts]]
-  source = 'black_stories_data'
+  source = 'mistory_data'
   destination = '/data'
 
 [http_service]

@@ -9,7 +9,7 @@ export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: AppSocket | null = null;
 
 /** Public URL of the deployed realtime server (Fly). Used when nothing else says otherwise. */
-const PRODUCTION_SOCKET_URL = "https://black-stories-realtime.fly.dev";
+const PRODUCTION_SOCKET_URL = "https://mistory-realtime.fly.dev";
 
 /**
  * Where the browser reaches the Socket.IO server.
