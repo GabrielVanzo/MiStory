@@ -65,6 +65,27 @@ interface RoomContextValue {
   resolveGuess: (guessId: string, accept: boolean) => Promise<void>;
 }
 
+/**
+ * Fills in round fields that a slightly-older realtime server might omit. The
+ * client and the socket server deploy separately (Vercel vs Fly), so a brief
+ * version skew is normal — it must degrade (a feature quietly missing) instead
+ * of crashing the whole room on `undefined.length`.
+ */
+function normalizeRoom(room: RoomState): RoomState {
+  const round = room.round;
+  if (!round) return room;
+  return {
+    ...room,
+    round: {
+      ...round,
+      questions: round.questions ?? [],
+      guesses: round.guesses ?? [],
+      hints: round.hints ?? [],
+      hintsAvailable: round.hintsAvailable ?? 0,
+    },
+  };
+}
+
 const RoomContext = createContext<RoomContextValue | null>(null);
 
 export function useRoom(): RoomContextValue {
@@ -93,7 +114,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
         const res = await joinRoom({ code, nickname: "", sessionToken: token });
         saveIdentity({ code, playerId: res.playerId, sessionToken: res.sessionToken });
         setPlayerId(res.playerId);
-        setRoom(res.room);
+        setRoom(normalizeRoom(res.room));
         setPhase("joined");
         setError(null);
       } catch (e) {
@@ -116,7 +137,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
         const res = await joinRoom({ code, nickname });
         saveIdentity({ code, playerId: res.playerId, sessionToken: res.sessionToken });
         setPlayerId(res.playerId);
-        setRoom(res.room);
+        setRoom(normalizeRoom(res.room));
         setPhase("joined");
       } catch (e) {
         const msg = e instanceof Error ? e.message : "INTERNAL";
@@ -280,7 +301,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
     const socket = getSocket();
 
     const onState = (s: RoomState) => {
-      setRoom(s);
+      setRoom(normalizeRoom(s));
       // Track how far our clock is from the server's, so the countdown follows
       // the server's deadline rather than the device clock.
       setOffsetMs(new Date(s.serverTime).getTime() - Date.now());
