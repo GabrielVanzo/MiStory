@@ -40,12 +40,20 @@ const LIMITS: Record<string, Limit> = {
 const hits = new Map<string, Map<string, number[]>>();
 
 /**
+ * Scales every budget. Defaults to 1 (production). Tests that intentionally
+ * fire hundreds of actions in a burst set this high so the limiter doesn't get
+ * in the way — the limiter's own behaviour is still exercised at factor 1.
+ */
+const FACTOR = Math.max(1, Number(process.env.RATE_LIMIT_FACTOR) || 1);
+
+/**
  * Records an attempt and reports whether it is allowed.
  * Unknown events are unlimited by design (only listed ones are budgeted).
  */
 export function allow(socketId: string, event: string, now: number = Date.now()): boolean {
   const limit = LIMITS[event];
   if (!limit) return true;
+  const max = limit.max * FACTOR;
 
   let perSocket = hits.get(socketId);
   if (!perSocket) {
@@ -56,7 +64,7 @@ export function allow(socketId: string, event: string, now: number = Date.now())
   const cutoff = now - limit.windowMs;
   const recent = (perSocket.get(event) ?? []).filter((t) => t > cutoff);
 
-  if (recent.length >= limit.max) {
+  if (recent.length >= max) {
     perSocket.set(event, recent);
     return false;
   }

@@ -33,6 +33,7 @@ const MESSAGES: Record<RealtimeErrorCode, string> = {
   MASTER_CANNOT_GUESS: "O mestre já conhece a resposta.",
   NOT_YOUR_TURN: "Aguarde a sua vez de perguntar.",
   ELIMINATED: "Seu chute foi recusado — você está fora desta rodada.",
+  NO_HINT_AVAILABLE: "Nenhuma dica liberada ainda.",
   GUESS_ALREADY_USED: "Você já usou seu único chute nesta rodada.",
   GUESS_NOT_FOUND: "Esse chute não existe mais.",
   GUESS_ALREADY_RESOLVED: "Esse chute já foi julgado.",

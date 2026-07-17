@@ -60,6 +60,47 @@ export async function hasPendingGuesses(roundId: string): Promise<boolean> {
   return pending !== null;
 }
 
+const HINT_STEP_MAX = 16;
+
+/**
+ * How many negative answers unlock ONE more hint: 4 per detective, capped at 16.
+ * So 2 detectives => every 8, 4+ detectives => every 16.
+ */
+export function hintStep(detectiveCount: number): number {
+  return Math.min(Math.max(detectiveCount, 1) * 4, HINT_STEP_MAX);
+}
+
+/** Questions answered "Não" or "Irrelevante" — the ones that count toward hints. */
+export async function countNegativeAnswers(roundId: string): Promise<number> {
+  return prisma.question.count({
+    where: { roundId, answer: { value: { in: ["NO", "IRRELEVANT"] } } },
+  });
+}
+
+/** Detectives in the room = everyone who is not this round's master. */
+export async function countDetectives(roomId: string, masterId: string | null): Promise<number> {
+  return prisma.player.count({
+    where: masterId ? { roomId, NOT: { id: masterId } } : { roomId },
+  });
+}
+
+/**
+ * How many hints could be released right now — tiers unlocked by negative
+ * answers (each worth `hintStep`), capped by how many the enigma actually has.
+ */
+export async function hintsAvailableFor(
+  round: { id: string; roomId: string; masterId: string | null },
+  totalHints: number,
+): Promise<number> {
+  if (totalHints <= 0) return 0;
+  const [negatives, detectives] = await Promise.all([
+    countNegativeAnswers(round.id),
+    countDetectives(round.roomId, round.masterId),
+  ]);
+  const unlockedTiers = Math.floor(negatives / hintStep(detectives));
+  return Math.min(unlockedTiers, totalHints);
+}
+
 type SeatRow = { id: string; isConnected: boolean };
 
 /** Room players in join order — the fixed seating the turn queue walks around. */

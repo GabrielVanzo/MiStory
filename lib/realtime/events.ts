@@ -103,6 +103,14 @@ export interface PublicRound {
   solvedById: string | null;
   /** Populated ONLY after the round ends — then it is public to everyone. */
   reveal: RoundReveal | null;
+  /** Hints the master has already released, in order. Public to everyone. */
+  hints: string[];
+  /**
+   * How many hints could be released right now (unlocked by negative answers,
+   * capped by how many the enigma has). `hintsAvailable > hints.length` means a
+   * new hint is waiting for the master to release.
+   */
+  hintsAvailable: number;
   /** The round's question log, oldest first. Public to everyone. */
   questions: QuestionDTO[];
   /** The round's guesses (no text), oldest first. Public to everyone. */
@@ -128,6 +136,8 @@ export interface RoundSecret {
   explanation: string;
   /** Texts of the guesses the master still has to accept or reject. */
   pendingGuesses: PendingGuess[];
+  /** ALL predefined hints for this enigma, so the master can preview the next. */
+  hints: string[];
 }
 
 /**
@@ -247,6 +257,8 @@ export interface ClientToServerEvents {
   "turn:pass": (ack: (res: Ack<null>) => void) => void;
   /** Master-only: reply Sim / Não / Irrelevante to a question. */
   "question:answer": (input: AnswerQuestionInput, ack: (res: Ack<QuestionDTO>) => void) => void;
+  /** Master-only: release the next unlocked hint to the detectives. */
+  "hint:release": (ack: (res: Ack<null>) => void) => void;
   /** Detective's single secret shot at the solution — one per round, ever. */
   "guess:submit": (input: SubmitGuessInput, ack: (res: Ack<GuessDTO>) => void) => void;
   /** Master-only: accept (ends round, guesser wins) or reject (guesser eliminated). */
@@ -313,6 +325,8 @@ export const RealtimeError = {
   NOT_YOUR_TURN: "NOT_YOUR_TURN",
   /** This player's guess was rejected — they are out of this round. */
   ELIMINATED: "ELIMINATED",
+  /** No hint is unlocked yet, or every hint has already been released. */
+  NO_HINT_AVAILABLE: "NO_HINT_AVAILABLE",
   /** One shot per round: this player already used theirs. */
   GUESS_ALREADY_USED: "GUESS_ALREADY_USED",
   GUESS_NOT_FOUND: "GUESS_NOT_FOUND",

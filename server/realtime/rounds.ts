@@ -13,8 +13,18 @@ import { RoomError } from "./errors";
 import { getGuesses } from "./guesses";
 import { asId } from "./input";
 import { getQuestions } from "./questions";
-import { firstAsker } from "./round-utils";
+import { firstAsker, hintsAvailableFor } from "./round-utils";
 import { awardSolve } from "./scores";
+
+/** Enigma hints are stored JSON-encoded (SQLite has no array type). Never throws. */
+function parseHints(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((h): h is string => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * PUBLIC round projection.
@@ -26,6 +36,7 @@ import { awardSolve } from "./scores";
  */
 const PUBLIC_ROUND_SELECT = {
   id: true,
+  roomId: true,
   number: true,
   status: true,
   masterId: true,
@@ -33,8 +44,11 @@ const PUBLIC_ROUND_SELECT = {
   solvedById: true,
   expiresAt: true,
   pausedRemainingMs: true,
+  hintsReleased: true,
+  // `enigma.hints` is loaded to compute counts/slices — NEVER spread whole into
+  // the DTO (that would leak unreleased hints). Only the released slice ships.
   enigma: {
-    select: { slug: true, title: true, teaser: true, difficulty: true },
+    select: { slug: true, title: true, teaser: true, difficulty: true, hints: true },
   },
 } as const;
 
@@ -70,6 +84,19 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
 
   const finished = isFinishedRoundStatus(round.status);
 
+  // Hints: keep the full list server-side; ship only the released slice. The
+  // "available" count drives the master's release button.
+  const allHints = parseHints(round.enigma.hints);
+  const released = allHints.slice(0, round.hintsReleased);
+  const hintsAvailable = finished
+    ? round.hintsReleased
+    : await hintsAvailableFor(
+        { id: round.id, roomId: round.roomId, masterId: round.masterId },
+        allHints.length,
+      );
+
+  const { slug, title, teaser, difficulty } = round.enigma;
+
   return {
     id: round.id,
     number: round.number,
@@ -80,8 +107,11 @@ export async function getPublicRound(roomId: string): Promise<PublicRound | null
     expiresAt: finished ? null : (round.expiresAt?.toISOString() ?? null),
     // Frozen countdown while paused for a guess (ACTIVE + no live deadline).
     pausedRemainingMs: finished ? null : round.pausedRemainingMs,
-    enigma: { ...round.enigma, difficulty: asDifficulty(round.enigma.difficulty) },
+    // Explicit fields only — never spread `round.enigma` (it carries `hints`).
+    enigma: { slug, title, teaser, difficulty: asDifficulty(difficulty) },
     reveal: finished ? await buildReveal(round.id) : null,
+    hints: released,
+    hintsAvailable,
     questions: await getQuestions(round.id),
     guesses: await getGuesses(round.id),
   };
@@ -96,7 +126,7 @@ async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
     where: { id: roundId },
     select: {
       id: true,
-      enigma: { select: { solution: true, explanation: true } },
+      enigma: { select: { solution: true, explanation: true, hints: true } },
       guesses: {
         where: { status: "PENDING" },
         orderBy: { createdAt: "asc" },
@@ -110,6 +140,8 @@ async function getRoundSecret(roundId: string): Promise<RoundSecret | null> {
     answer: round.enigma.solution,
     explanation: round.enigma.explanation,
     pendingGuesses: round.guesses,
+    // The master previews the FULL list; detectives only see released ones.
+    hints: parseHints(round.enigma.hints),
   };
 }
 
@@ -290,6 +322,35 @@ export async function beginRound(roomId: string, requesterId: string): Promise<S
   const round = await getPublicRound(roomId);
   if (!round) throw new RoomError(RealtimeError.INTERNAL);
   return { round, expiresAt };
+}
+
+/**
+ * Master-only: reveals the next unlocked hint to the detectives. Recomputes the
+ * unlock server-side, so a client cannot force a hint that isn't earned yet.
+ */
+export async function releaseHint(roomId: string, requesterId: string): Promise<void> {
+  const round = await prisma.round.findFirst({
+    where: { roomId, status: "ACTIVE" },
+    orderBy: { number: "desc" },
+    select: {
+      id: true,
+      roomId: true,
+      masterId: true,
+      hintsReleased: true,
+      enigma: { select: { hints: true } },
+    },
+  });
+  if (!round) throw new RoomError(RealtimeError.NO_ACTIVE_ROUND);
+  if (round.masterId !== requesterId) throw new RoomError(RealtimeError.FORBIDDEN);
+
+  const total = parseHints(round.enigma.hints).length;
+  const available = await hintsAvailableFor(round, total);
+  if (round.hintsReleased >= available) throw new RoomError(RealtimeError.NO_HINT_AVAILABLE);
+
+  await prisma.round.update({
+    where: { id: round.id },
+    data: { hintsReleased: round.hintsReleased + 1 },
+  });
 }
 
 /**

@@ -57,6 +57,8 @@ interface RoomContextValue {
   /** Skip your turn without asking. */
   passTurn: () => Promise<void>;
   answerQuestion: (questionId: string, value: AnswerValue) => Promise<void>;
+  /** Master-only: release the next unlocked hint to the detectives. */
+  releaseHint: () => Promise<void>;
   /** Submit this player's single secret shot at the solution. */
   submitGuess: (content: string) => Promise<boolean>;
   /** Master-only: accept (ends the round) or reject (eliminates the guesser). */
@@ -224,6 +226,17 @@ export function RoomProvider({ code, children }: { code: string; children: React
     }
   }, []);
 
+  const releaseHint = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await getSocket().emitWithAck("hint:release");
+      if (!res.ok) setError(realtimeErrorMessage(res.error));
+      // The released hint reaches everyone through the next `room:state`.
+    } catch {
+      setError(realtimeErrorMessage("INTERNAL"));
+    }
+  }, []);
+
   const submitGuess = useCallback(async (content: string) => {
     setError(null);
     try {
@@ -357,6 +370,7 @@ export function RoomProvider({ code, children }: { code: string; children: React
     askQuestion,
     passTurn,
     answerQuestion,
+    releaseHint,
     submitGuess,
     resolveGuess,
   };

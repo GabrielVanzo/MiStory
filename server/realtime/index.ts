@@ -32,6 +32,7 @@ import {
   getActiveMasterId,
   getActiveRoundSecret,
   pauseRound,
+  releaseHint,
   restartMatch,
   resumeRound,
   startRound,
@@ -294,6 +295,22 @@ export function registerRealtimeHandlers(io: RealtimeServer): void {
         // Master-only; only YES | NO | IRRELEVANT; advances the turn.
         const question = await answerQuestion(roomId, playerId, input);
         ack({ ok: true, data: question });
+        await broadcastState(io, roomId);
+      } catch (error) {
+        ack(toErrorAck(error));
+      }
+    });
+
+    socket.on("hint:release", async (ack) => {
+      const { playerId, roomId } = socket.data;
+      if (!playerId || !roomId) {
+        ack({ ok: false, error: RealtimeError.NOT_IN_ROOM });
+        return;
+      }
+      try {
+        // Master-only; the newly released hint reaches everyone via room:state.
+        await releaseHint(roomId, playerId);
+        ack({ ok: true, data: null });
         await broadcastState(io, roomId);
       } catch (error) {
         ack(toErrorAck(error));

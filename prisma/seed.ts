@@ -25,6 +25,8 @@ async function main(): Promise<void> {
         teaser: enigma.intro,
         solution: enigma.answer,
         explanation: enigma.explanation,
+        // JSON-encoded string[] — SQLite has no array type (see schema note).
+        hints: JSON.stringify(enigma.hints ?? []),
         difficulty: enigma.level,
         language: "pt-BR",
         isPublished: true,
@@ -34,6 +36,7 @@ async function main(): Promise<void> {
         teaser: enigma.intro,
         solution: enigma.answer,
         explanation: enigma.explanation,
+        hints: JSON.stringify(enigma.hints ?? []),
         difficulty: enigma.level,
         // Re-publish in case it had been retired before and came back.
         isPublished: true,
