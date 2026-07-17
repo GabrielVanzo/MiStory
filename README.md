@@ -1,4 +1,4 @@
-# Black Stories
+# MiStory
 
 Jogo de enigmas multiplayer em tempo real. Um mestre conhece a história completa;
 os demais jogadores fazem perguntas de "sim ou não" para desvendar o mistério.

@@ -1,5 +1,5 @@
 /**
- * Enum-like value sets for Black Stories.
+ * Enum-like value sets for MiStory.
  *
  * These mirror the `String` columns in `prisma/schema.prisma`. They live in
  * TypeScript because SQLite has no native enum type; on PostgreSQL they could

@@ -22,19 +22,19 @@ export const metadata: Metadata = {
   // Required for OG/canonical URLs to resolve absolutely in production.
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Black Stories",
-    template: "%s · Black Stories",
+    default: "MiStory",
+    template: "%s · MiStory",
   },
   description: DESCRIPTION,
-  applicationName: "Black Stories",
+  applicationName: "MiStory",
   openGraph: {
     type: "website",
-    siteName: "Black Stories",
-    title: "Black Stories",
+    siteName: "MiStory",
+    title: "MiStory",
     description: DESCRIPTION,
     locale: "pt_BR",
   },
-  twitter: { card: "summary_large_image", title: "Black Stories", description: DESCRIPTION },
+  twitter: { card: "summary_large_image", title: "MiStory", description: DESCRIPTION },
 };
 
 export default function RootLayout({

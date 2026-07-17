@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
-// Black Stories is a dark-first (noir) experience, so toasts default to the
+// MiStory is a dark-first (noir) experience, so toasts default to the
 // dark theme. Pass `theme` to override.
 const Toaster = ({ theme = "dark", ...props }: ToasterProps) => {
   return (

@@ -125,7 +125,7 @@ export default function DesignSystemPage() {
           </Badge>
           <Badge variant="info">v0.1</Badge>
         </div>
-        <h1 className="text-gradient-brand text-5xl font-semibold tracking-tight">Black Stories</h1>
+        <h1 className="text-gradient-brand text-5xl font-semibold tracking-tight">MiStory</h1>
         <p className="text-muted-foreground max-w-xl text-lg text-balance">
           Identidade visual premium — paleta, tipografia e componentes. Inspiração: Discord, Linear,
           Notion, Riot e Steam.

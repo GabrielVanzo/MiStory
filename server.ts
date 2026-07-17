@@ -23,7 +23,7 @@ const PORT = Number(process.env.PORT ?? process.env.SOCKET_PORT ?? 3001);
  * Allowed browser origins, comma-separated. A list rather than a single value
  * because a real deploy has more than one: the platform URL and the custom
  * domain (and they change at different times).
- *   CLIENT_ORIGIN="https://black-stories.vercel.app,https://seujogo.com.br"
+ *   CLIENT_ORIGIN="https://mistory.vercel.app,https://seujogo.com.br"
  */
 const ORIGINS = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
   .split(",")

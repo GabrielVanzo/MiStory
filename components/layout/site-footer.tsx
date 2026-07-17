@@ -18,7 +18,7 @@ function SiteFooter() {
             </span>
             <span className="hover:text-foreground cursor-default transition-colors">Termos</span>
           </nav>
-          <p>© 2026 Black Stories · MVP</p>
+          <p>© 2026 MiStory · MVP</p>
         </div>
       </div>
     </footer>
